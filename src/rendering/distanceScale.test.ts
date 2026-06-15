@@ -6,30 +6,27 @@ import { scaleDistanceForDisplay } from "./distanceScale";
 describe("scaleDistanceForDisplay", () => {
   it("leaves physical values unchanged at 1x", () => {
     const position = vector(ASTRONOMICAL_UNIT_M, 2, 3);
-    expect(
-      scaleDistanceForDisplay(position, { innerScale: 1, transitionRadiusAu: 8 }),
-    ).toEqual(position);
+    expect(scaleDistanceForDisplay(position, { scaleFactor: 1 })).toEqual(position);
   });
 
-  it("expands the inner system while anchoring outer distances", () => {
-    const inner = scaleDistanceForDisplay(vector(ASTRONOMICAL_UNIT_M, 0, 0), {
-      innerScale: 6,
-      transitionRadiusAu: 8,
-    });
-    const outer = scaleDistanceForDisplay(vector(10 * ASTRONOMICAL_UNIT_M, 0, 0), {
-      innerScale: 6,
-      transitionRadiusAu: 8,
-    });
-    expect(inner.x).toBeGreaterThan(4 * ASTRONOMICAL_UNIT_M);
-    expect(outer.x).toBe(10 * ASTRONOMICAL_UNIT_M);
+  it("scales inner and outer system distances uniformly", () => {
+    const inner = scaleDistanceForDisplay(
+      vector(ASTRONOMICAL_UNIT_M, 0, 0),
+      { scaleFactor: 6 },
+    );
+    const outer = scaleDistanceForDisplay(
+      vector(30 * ASTRONOMICAL_UNIT_M, 0, 0),
+      { scaleFactor: 6 },
+    );
+    expect(inner.x).toBe(6 * ASTRONOMICAL_UNIT_M);
+    expect(outer.x).toBe(180 * ASTRONOMICAL_UNIT_M);
   });
 
   it("rejects invalid display scale configuration", () => {
     expect(() =>
       scaleDistanceForDisplay(vector(1, 0, 0), {
-        innerScale: 0,
-        transitionRadiusAu: 8,
+        scaleFactor: 0,
       }),
-    ).toThrow(/innerScale/);
+    ).toThrow(/scaleFactor/);
   });
 });

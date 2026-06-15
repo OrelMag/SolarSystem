@@ -196,8 +196,8 @@ cometTailsInput.addEventListener("change", () =>
 labelsInput.addEventListener("change", () => renderer.setLabelsVisible(labelsInput.checked));
 distanceScaleInput.addEventListener("input", () => {
   const scale = Number(distanceScaleInput.value);
-  renderer.setInnerDistanceScale(scale);
-  distanceScaleValue.value = scale === 1 ? "1x physical" : `${scale}x inner`;
+  renderer.setDistanceScale(scale);
+  distanceScaleValue.value = scale === 1 ? "1x physical" : `${scale}x all`;
 });
 renderer.onBodySelected((id) => {
   updateSelectedBody(id);

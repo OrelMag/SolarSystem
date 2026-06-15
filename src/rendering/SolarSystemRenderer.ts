@@ -94,7 +94,7 @@ export class SolarSystemRenderer {
     this.controls.dampingFactor = 0.12;
     this.controls.screenSpacePanning = true;
     this.controls.zoomToCursor = true;
-    this.controls.minZoom = 0.25;
+    this.controls.minZoom = 0.1;
     this.controls.maxZoom = 300;
 
     this.addBackground();
@@ -190,11 +190,8 @@ export class SolarSystemRenderer {
     this.labelsContainer.style.display = visible ? "block" : "none";
   }
 
-  setInnerDistanceScale(innerScale: number): void {
-    this.distanceScale = {
-      innerScale,
-      transitionRadiusAu: DEFAULT_DISTANCE_SCALE.transitionRadiusAu,
-    };
+  setDistanceScale(scaleFactor: number): void {
+    this.distanceScale = { scaleFactor };
     this.clearTrails();
   }
 
@@ -218,11 +215,11 @@ export class SolarSystemRenderer {
   }
 
   fitSystem(): void {
-    this.frameAt(55);
+    this.frameAt(55 * this.distanceScale.scaleFactor);
   }
 
   fitInnerSystem(): void {
-    this.frameAt(6.5);
+    this.frameAt(6.5 * this.distanceScale.scaleFactor);
   }
 
   clearTrails(): void {
