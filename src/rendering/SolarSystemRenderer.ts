@@ -1,8 +1,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type {
+  HierarchicalBodyState,
+  HierarchicalOrbitalBody,
   MasslessBodyState,
-  MasslessOrbitalBody,
   OrbitalParticle,
   ParticleBeltDefinition,
 } from "../domain/orbits";
@@ -20,10 +21,13 @@ import {
   scaleDistanceForDisplay,
   type DistanceScaleConfig,
 } from "./distanceScale";
+import { shouldShowMoon } from "./moonVisibility";
 
 const MAX_TRAIL_POINTS = 900;
 const TRAIL_SAMPLE_SECONDS = 10 * DAY_SECONDS;
 const ORBIT_REFRESH_SECONDS = 30 * DAY_SECONDS;
+const MOON_VISIBILITY_ZOOM = 28;
+const LOCAL_ORBIT_DISPLAY_SCALE = 80;
 
 interface BodyView {
   readonly mesh: THREE.Mesh;
@@ -34,11 +38,12 @@ interface BodyView {
   lastTrailSampleSeconds: number;
 }
 
-interface CometView {
+interface OrbitalBodyView {
+  readonly body: HierarchicalOrbitalBody;
   readonly mesh: THREE.Mesh;
   readonly label: HTMLDivElement;
   readonly orbit: THREE.Line;
-  readonly tail: THREE.Line;
+  readonly tail?: THREE.Line;
 }
 
 interface BeltView {
@@ -54,7 +59,7 @@ export class SolarSystemRenderer {
   private readonly renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   private readonly controls: OrbitControls;
   private readonly bodyViews = new Map<string, BodyView>();
-  private readonly cometViews = new Map<string, CometView>();
+  private readonly orbitalViews = new Map<string, OrbitalBodyView>();
   private readonly beltViews = new Map<string, BeltView>();
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
@@ -64,15 +69,19 @@ export class SolarSystemRenderer {
   private planetPathsVisible = true;
   private cometPathsVisible = true;
   private cometTailsVisible = true;
+  private moonsVisible = true;
   private distanceScale: DistanceScaleConfig = DEFAULT_DISTANCE_SCALE;
   private selectionHandler: ((id: string) => void) | undefined;
+  private followChangeHandler: ((id: string | undefined) => void) | undefined;
+  private followBodyId: string | undefined;
+  private selectedBodyId = "sun";
   private lastOrbitRefreshSeconds = Number.NEGATIVE_INFINITY;
 
   constructor(
     private readonly container: HTMLElement,
     private readonly labelsContainer: HTMLElement,
     bodies: readonly Readonly<MutableBodyState>[],
-    comets: readonly MasslessOrbitalBody[],
+    orbitalBodies: readonly HierarchicalOrbitalBody[],
     belts: readonly {
       readonly definition: ParticleBeltDefinition;
       readonly particles: readonly OrbitalParticle[];
@@ -99,9 +108,10 @@ export class SolarSystemRenderer {
 
     this.addBackground();
     this.createBodyViews(bodies);
-    this.createCometViews(comets);
+    this.createOrbitalViews(orbitalBodies);
     this.createBeltViews(belts);
     this.renderer.domElement.addEventListener("pointerdown", this.handlePointerDown);
+    this.controls.addEventListener("start", this.handleControlsStart);
     this.resizeObserver = new ResizeObserver(this.resize);
     this.resizeObserver.observe(container);
   }
@@ -110,9 +120,13 @@ export class SolarSystemRenderer {
     this.selectionHandler = handler;
   }
 
+  onFollowChanged(handler: (id: string | undefined) => void): void {
+    this.followChangeHandler = handler;
+  }
+
   update(
     bodies: readonly Readonly<MutableBodyState>[],
-    comets: readonly MasslessBodyState[],
+    orbitalStates: readonly HierarchicalBodyState[],
     elapsedSeconds: number,
   ): void {
     const sun = bodies.find((body) => body.id === "sun");
@@ -134,13 +148,17 @@ export class SolarSystemRenderer {
       }
     }
 
-    for (const cometState of comets) {
-      const view = this.cometViews.get(cometState.body.id);
+    for (const orbitalState of orbitalStates) {
+      const view = this.orbitalViews.get(orbitalState.body.id);
       if (!view) continue;
-      const absolutePosition = add(sun.positionM, cometState.positionM);
-      const scenePosition = this.toScenePosition(absolutePosition);
+      const scenePosition = this.orbitalStateToScenePosition(orbitalState);
       view.mesh.position.copy(scenePosition);
-      this.updateCometTail(view, scenePosition, this.toScenePosition(sun.positionM));
+      if (orbitalState.body.category === "moon") {
+        view.orbit.position.copy(this.toScenePosition(orbitalState.parentPositionM));
+      }
+      if (orbitalState.body.category === "comet" && view.tail) {
+        this.updateCometTail(view.tail, scenePosition, this.toScenePosition(sun.positionM));
+      }
     }
 
     const julianDay = J2000_JULIAN_DAY + elapsedSeconds / DAY_SECONDS;
@@ -149,9 +167,11 @@ export class SolarSystemRenderer {
       elapsedSeconds - this.lastOrbitRefreshSeconds >= ORBIT_REFRESH_SECONDS ||
       elapsedSeconds === 0
     ) {
-      this.updateOrbitPaths(bodies, comets, sun);
+      this.updateOrbitPaths(bodies, orbitalStates, sun);
       this.lastOrbitRefreshSeconds = elapsedSeconds;
     }
+    this.updateFollowTarget();
+    this.updateMoonVisibility();
   }
 
   render(): void {
@@ -172,12 +192,21 @@ export class SolarSystemRenderer {
 
   setCometPathsVisible(visible: boolean): void {
     this.cometPathsVisible = visible;
-    for (const view of this.cometViews.values()) view.orbit.visible = visible;
+    for (const view of this.orbitalViews.values()) {
+      if (view.body.category === "comet") view.orbit.visible = visible;
+    }
   }
 
   setCometTailsVisible(visible: boolean): void {
     this.cometTailsVisible = visible;
-    for (const view of this.cometViews.values()) view.tail.visible = visible;
+    for (const view of this.orbitalViews.values()) {
+      if (view.tail) view.tail.visible = visible;
+    }
+  }
+
+  setMoonsVisible(visible: boolean): void {
+    this.moonsVisible = visible;
+    this.updateMoonVisibility();
   }
 
   setBeltVisible(id: ParticleBeltDefinition["id"], visible: boolean): void {
@@ -196,22 +225,41 @@ export class SolarSystemRenderer {
   }
 
   selectBody(id: string): void {
+    this.selectedBodyId = id;
     for (const [bodyId, view] of this.bodyViews) {
       this.styleSelection(view.mesh, view.label, bodyId === id);
     }
-    for (const [bodyId, view] of this.cometViews) {
+    for (const [bodyId, view] of this.orbitalViews) {
       this.styleSelection(view.mesh, view.label, bodyId === id);
     }
+    this.updateMoonVisibility();
   }
 
-  focusBody(id: string): void {
-    const view = this.bodyViews.get(id) ?? this.cometViews.get(id);
+  focusBody(id: string, follow = true): void {
+    const view = this.bodyViews.get(id) ?? this.orbitalViews.get(id);
     if (!view) return;
     this.controls.target.copy(view.mesh.position);
     this.camera.position.x = view.mesh.position.x;
     this.camera.position.y = view.mesh.position.y;
-    this.camera.zoom = Math.max(this.camera.zoom, id === "sun" ? 5 : 14);
+    const hasMoons = [...this.orbitalViews.values()].some(
+      (candidate) => candidate.body.category === "moon" && candidate.body.parentId === id,
+    );
+    const isMoon = "body" in view && view.body.category === "moon";
+    this.camera.zoom = Math.max(
+      this.camera.zoom,
+      id === "sun" ? 5 : hasMoons || isMoon ? 90 : 14,
+    );
     this.camera.updateProjectionMatrix();
+    if (follow) this.setFollowBody(id);
+  }
+
+  setFollowBody(id: string | undefined): void {
+    this.followBodyId = id;
+    this.followChangeHandler?.(id);
+  }
+
+  stopFollowing(): void {
+    this.setFollowBody(undefined);
   }
 
   fitSystem(): void {
@@ -235,9 +283,10 @@ export class SolarSystemRenderer {
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener("pointerdown", this.handlePointerDown);
     this.controls.dispose();
+    this.controls.removeEventListener("start", this.handleControlsStart);
     this.renderer.dispose();
     for (const view of this.bodyViews.values()) view.label.remove();
-    for (const view of this.cometViews.values()) view.label.remove();
+    for (const view of this.orbitalViews.values()) view.label.remove();
   }
 
   private createBodyViews(bodies: readonly Readonly<MutableBodyState>[]): void {
@@ -264,13 +313,20 @@ export class SolarSystemRenderer {
     }
   }
 
-  private createCometViews(comets: readonly MasslessOrbitalBody[]): void {
-    for (const comet of comets) {
-      const mesh = this.createDisc(comet.id, 0.13, comet.visual.color);
-      const label = this.createLabel(comet.name);
-      const orbit = this.createLine(comet.visual.color, 0.24);
-      const tail = this.createLine(comet.visual.color, 0.7);
-      this.cometViews.set(comet.id, { mesh, label, orbit, tail });
+  private createOrbitalViews(bodies: readonly HierarchicalOrbitalBody[]): void {
+    for (const body of bodies) {
+      const radius =
+        body.category === "moon"
+          ? Math.max(0.055, Math.min(0.13, Math.log10(body.radiusM) * 0.035 - 0.08))
+          : body.category === "dwarf-planet"
+            ? 0.15
+            : 0.13;
+      const mesh = this.createDisc(body.id, radius, body.visual.color);
+      const label = this.createLabel(body.name);
+      const orbit = this.createLine(body.visual.color, body.category === "moon" ? 0.32 : 0.24);
+      const tail =
+        body.category === "comet" ? this.createLine(body.visual.color, 0.7) : undefined;
+      this.orbitalViews.set(body.id, { body, mesh, label, orbit, tail });
     }
   }
 
@@ -327,7 +383,7 @@ export class SolarSystemRenderer {
 
   private updateOrbitPaths(
     bodies: readonly Readonly<MutableBodyState>[],
-    comets: readonly MasslessBodyState[],
+    orbitalStates: readonly MasslessBodyState[],
     sun: Readonly<MutableBodyState>,
   ): void {
     for (const body of bodies) {
@@ -348,26 +404,29 @@ export class SolarSystemRenderer {
       view.orbit.geometry.setFromPoints(points);
       view.orbit.visible = this.planetPathsVisible;
     }
-    for (const comet of comets) {
-      const view = this.cometViews.get(comet.body.id);
+    for (const orbitalState of orbitalStates) {
+      const view = this.orbitalViews.get(orbitalState.body.id);
       if (!view) continue;
-      const elements = stateToOsculatingElements(
-        comet.positionM,
-        comet.velocityMps,
-        this.centralMassKg,
-        J2000_JULIAN_DAY,
-      );
-      view.orbit.geometry.setFromPoints(
-        sampleOrbitPath(elements, 320).map((point) =>
-          this.toScenePosition(add(point, sun.positionM)),
-        ),
-      );
-      view.orbit.visible = this.cometPathsVisible;
+      if (orbitalState.body.category === "moon") {
+        view.orbit.geometry.setFromPoints(
+          sampleOrbitPath(orbitalState.body.elements, 128).map((point) =>
+            this.toLocalSceneOffset(point),
+          ),
+        );
+      } else {
+        view.orbit.geometry.setFromPoints(
+          sampleOrbitPath(orbitalState.body.elements, 320).map((point) =>
+            this.toScenePosition(add(point, orbitalState.parentPositionM)),
+          ),
+        );
+      }
+      view.orbit.visible =
+        orbitalState.body.category === "comet" ? this.cometPathsVisible : true;
     }
   }
 
   private updateCometTail(
-    view: CometView,
+    tail: THREE.Line,
     cometPosition: THREE.Vector3,
     sunPosition: THREE.Vector3,
   ): void {
@@ -376,10 +435,60 @@ export class SolarSystemRenderer {
     const activity = Math.max(0, Math.min(1, (6 - distanceAu) / 5));
     const lengthAu = 0.08 + activity * 0.65;
     away.normalize().multiplyScalar(lengthAu);
-    view.tail.geometry.setFromPoints([cometPosition, cometPosition.clone().add(away)]);
-    const material = view.tail.material;
+    tail.geometry.setFromPoints([cometPosition, cometPosition.clone().add(away)]);
+    const material = tail.material;
     if (material instanceof THREE.LineBasicMaterial) material.opacity = activity * 0.72;
-    view.tail.visible = this.cometTailsVisible && activity > 0.02;
+    tail.visible = this.cometTailsVisible && activity > 0.02;
+  }
+
+  private orbitalStateToScenePosition(state: HierarchicalBodyState): THREE.Vector3 {
+    if (state.body.category !== "moon") return this.toScenePosition(state.positionM);
+    return this.toScenePosition(state.parentPositionM).add(
+      this.toLocalSceneOffset(state.relativePositionM),
+    );
+  }
+
+  private toLocalSceneOffset(positionM: {
+    x: number;
+    y: number;
+    z: number;
+  }): THREE.Vector3 {
+    return new THREE.Vector3(
+      (positionM.x / ASTRONOMICAL_UNIT_M) * LOCAL_ORBIT_DISPLAY_SCALE,
+      (positionM.y / ASTRONOMICAL_UNIT_M) * LOCAL_ORBIT_DISPLAY_SCALE,
+      (positionM.z / ASTRONOMICAL_UNIT_M) * LOCAL_ORBIT_DISPLAY_SCALE,
+    );
+  }
+
+  private updateMoonVisibility(): void {
+    const selectedOrbital = this.orbitalViews.get(this.selectedBodyId)?.body;
+    for (const view of this.orbitalViews.values()) {
+      if (view.body.category !== "moon") continue;
+      const visible = shouldShowMoon({
+        enabled: this.moonsVisible,
+        cameraZoom: this.camera.zoom,
+        thresholdZoom: MOON_VISIBILITY_ZOOM,
+        moonId: view.body.id,
+        parentId: view.body.parentId,
+        selectedBodyId: this.selectedBodyId,
+        selectedParentId: selectedOrbital?.parentId,
+      });
+      view.mesh.visible = visible;
+      view.orbit.visible = visible;
+      if (!visible) view.label.style.display = "none";
+    }
+  }
+
+  private updateFollowTarget(): void {
+    if (!this.followBodyId) return;
+    const view = this.bodyViews.get(this.followBodyId) ?? this.orbitalViews.get(this.followBodyId);
+    if (!view) {
+      this.setFollowBody(undefined);
+      return;
+    }
+    const delta = view.mesh.position.clone().sub(this.controls.target);
+    this.controls.target.copy(view.mesh.position);
+    this.camera.position.add(delta);
   }
 
   private createDisc(id: string, radius: number, color: number): THREE.Mesh {
@@ -481,9 +590,13 @@ export class SolarSystemRenderer {
     const height = this.container.clientHeight;
     const entries = [
       ...[...this.bodyViews.values()].map((view) => ({ mesh: view.mesh, label: view.label })),
-      ...[...this.cometViews.values()].map((view) => ({ mesh: view.mesh, label: view.label })),
+      ...[...this.orbitalViews.values()].map((view) => ({ mesh: view.mesh, label: view.label })),
     ];
     for (const view of entries) {
+      if (!view.mesh.visible) {
+        view.label.style.display = "none";
+        continue;
+      }
       const screen = view.mesh.position.clone().project(this.camera);
       const visible = Math.abs(screen.x) <= 1.1 && Math.abs(screen.y) <= 1.1;
       view.label.style.display = visible ? "block" : "none";
@@ -512,7 +625,9 @@ export class SolarSystemRenderer {
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const meshes = [
       ...[...this.bodyViews.values()].map((view) => view.mesh),
-      ...[...this.cometViews.values()].map((view) => view.mesh),
+      ...[...this.orbitalViews.values()]
+        .filter((view) => view.mesh.visible)
+        .map((view) => view.mesh),
     ];
     const hit = this.raycaster.intersectObjects(meshes, false)[0];
     const id = hit?.object.userData.bodyId;
@@ -520,6 +635,10 @@ export class SolarSystemRenderer {
       this.selectBody(id);
       this.selectionHandler?.(id);
     }
+  };
+
+  private readonly handleControlsStart = (): void => {
+    if (this.followBodyId) this.setFollowBody(undefined);
   };
 
   private toScenePosition(positionM: { x: number; y: number; z: number }): THREE.Vector3 {

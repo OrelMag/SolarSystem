@@ -1,20 +1,40 @@
 import "./style.css";
 import { BELT_DEFINITIONS, generateBeltParticles } from "./data/belts";
+import { MASSIVE_BODY_FACTS } from "./data/bodyFacts";
 import { COMETS } from "./data/comets";
+import { EXPLORATION_BODIES } from "./data/satellites";
 import { createSolarSystem } from "./data/solarSystem";
-import type { MasslessBodyState } from "./domain/orbits";
-import { magnitude } from "./domain/vector";
+import type {
+  HierarchicalBodyState,
+  HierarchicalOrbitalBody,
+} from "./domain/orbits";
+import { magnitude, subtract } from "./domain/vector";
 import {
   calculateConservedQuantities,
   relativeDrift,
 } from "./physics/diagnostics";
-import { ASTRONOMICAL_UNIT_M, DAY_SECONDS, J2000_ISO } from "./physics/constants";
+import {
+  ASTRONOMICAL_UNIT_M,
+  DAY_SECONDS,
+  GRAVITATIONAL_CONSTANT,
+  J2000_ISO,
+} from "./physics/constants";
+import {
+  propagateHierarchicalBodies,
+  validateOrbitalHierarchy,
+} from "./physics/hierarchicalOrbits";
 import {
   J2000_JULIAN_DAY,
-  propagateEllipticOrbit,
+  stateToOsculatingElements,
 } from "./physics/orbitalMechanics";
 import { NBodySimulation } from "./physics/simulation";
 import { SolarSystemRenderer } from "./rendering/SolarSystemRenderer";
+import {
+  filterNavigatorEntries,
+  groupNavigatorEntries,
+  type NavigatorCategory,
+  type NavigatorEntry,
+} from "./ui/navigator";
 
 const FIXED_TIMESTEP_SECONDS = 3 * 3_600;
 const MAX_STEPS_PER_FRAME = 80;
@@ -28,6 +48,14 @@ const TIME_SCALES = [
   { label: "1 year/s", seconds: 365.25 * DAY_SECONDS },
 ] as const;
 
+const GROUP_LABELS: Readonly<Partial<Record<NavigatorCategory, string>>> = {
+  star: "Star",
+  planet: "Planets",
+  "dwarf-planet": "Dwarf Planets",
+  moon: "Moons",
+  comet: "Comets",
+};
+
 function requireElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
   if (!(element instanceof HTMLElement)) throw new Error(`Missing element "#${id}".`);
@@ -37,7 +65,15 @@ function requireElement<T extends HTMLElement>(id: string): T {
 const initialBodies = createSolarSystem();
 const initialSun = initialBodies.find((body) => body.id === "sun");
 if (!initialSun) throw new Error("Solar dataset must include the Sun.");
-const sunMassKg = initialSun.massKg;
+const orbitalDefinitions: readonly HierarchicalOrbitalBody[] = [
+  ...COMETS,
+  ...EXPLORATION_BODIES,
+];
+validateOrbitalHierarchy(
+  orbitalDefinitions,
+  initialBodies.map((body) => body.id),
+);
+
 const simulation = new NBodySimulation(initialBodies, {
   fixedTimestepSeconds: FIXED_TIMESTEP_SECONDS,
   minimumDistanceM: 1_000,
@@ -50,15 +86,16 @@ const renderer = new SolarSystemRenderer(
   requireElement("scene"),
   requireElement("labels"),
   simulation.bodies,
-  COMETS,
+  orbitalDefinitions,
   belts,
-  sunMassKg,
+  initialSun.massKg,
 );
 
 const toggleButton = requireElement<HTMLButtonElement>("toggle");
 const resetButton = requireElement<HTMLButtonElement>("reset");
 const fitButton = requireElement<HTMLButtonElement>("fit");
 const fitInnerButton = requireElement<HTMLButtonElement>("fit-inner");
+const stopFollowButton = requireElement<HTMLButtonElement>("stop-follow");
 const speedInput = requireElement<HTMLInputElement>("speed");
 const speedValue = requireElement<HTMLOutputElement>("speed-value");
 const trailsInput = requireElement<HTMLInputElement>("trails");
@@ -67,9 +104,12 @@ const mainBeltInput = requireElement<HTMLInputElement>("main-belt");
 const kuiperBeltInput = requireElement<HTMLInputElement>("kuiper-belt");
 const cometPathsInput = requireElement<HTMLInputElement>("comet-paths");
 const cometTailsInput = requireElement<HTMLInputElement>("comet-tails");
+const moonsInput = requireElement<HTMLInputElement>("moons-toggle");
 const labelsInput = requireElement<HTMLInputElement>("labels-toggle");
 const distanceScaleInput = requireElement<HTMLInputElement>("distance-scale");
 const distanceScaleValue = requireElement<HTMLOutputElement>("distance-scale-value");
+const searchInput = requireElement<HTMLInputElement>("body-search");
+const searchResults = requireElement("body-results");
 const statusElement = requireElement("status");
 const dateElement = requireElement("date");
 const elapsedElement = requireElement("elapsed");
@@ -78,56 +118,169 @@ const momentumDriftElement = requireElement("momentum-drift");
 const stepsFrameElement = requireElement("steps-frame");
 const selectedBodyElement = requireElement("selected-body");
 
+const namesById = new Map<string, string>([
+  ...initialBodies.map((body) => [body.id, body.name] as const),
+  ...orbitalDefinitions.map((body) => [body.id, body.name] as const),
+]);
+const navigatorEntries: readonly NavigatorEntry[] = [
+  ...initialBodies.map((body) => ({
+    id: body.id,
+    name: body.name,
+    category: body.category,
+    parentName: body.id === "sun" ? undefined : "Sun",
+  })),
+  ...orbitalDefinitions.map((body) => ({
+    id: body.id,
+    name: body.name,
+    category: body.category,
+    parentName: namesById.get(body.parentId),
+  })),
+];
+
 let running = true;
 let accumulatorSeconds = 0;
 let lastFrameTime = performance.now();
 let timeScale = TIME_SCALES[Number(speedInput.value)] ?? TIME_SCALES[3];
 let initialConserved = calculateConservedQuantities(simulation.bodies);
 let lastDiagnosticsElapsed = Number.NEGATIVE_INFINITY;
-let cometStates: readonly MasslessBodyState[] = calculateCometStates(0);
+let orbitalStates: readonly HierarchicalBodyState[] = calculateOrbitalStates(0);
+let selectedBodyId = "sun";
+let filteredNavigatorEntries: NavigatorEntry[] = [];
+let activeNavigatorIndex = 0;
 
-function calculateCometStates(elapsedSeconds: number): MasslessBodyState[] {
-  const julianDay = J2000_JULIAN_DAY + elapsedSeconds / DAY_SECONDS;
-  return COMETS.map((body) => {
-    const state = propagateEllipticOrbit(body.elements, julianDay, sunMassKg);
-    return { body, ...state };
-  });
+function calculateOrbitalStates(elapsedSeconds: number): HierarchicalBodyState[] {
+  return propagateHierarchicalBodies(
+    orbitalDefinitions,
+    simulation.bodies,
+    J2000_JULIAN_DAY + elapsedSeconds / DAY_SECONDS,
+  );
+}
+
+function parentMassKg(parentId: string): number {
+  return (
+    simulation.bodies.find((body) => body.id === parentId)?.massKg ??
+    orbitalDefinitions.find((body) => body.id === parentId)?.massKg ??
+    0
+  );
+}
+
+function formatPeriod(seconds: number): string {
+  const days = seconds / DAY_SECONDS;
+  return days >= 730 ? `${(days / 365.25).toFixed(2)} years` : `${days.toFixed(2)} days`;
 }
 
 function updateSelectedBody(id: string): void {
+  selectedBodyId = id;
   const body = simulation.bodies.find((candidate) => candidate.id === id);
   if (body) {
-    const speedKps = magnitude(body.velocityMps) / 1_000;
-    const distanceAu = magnitude(body.positionM) / ASTRONOMICAL_UNIT_M;
+    const facts = MASSIVE_BODY_FACTS[id];
+    const sun = simulation.bodies.find((candidate) => candidate.id === "sun");
+    let orbitalText = "System center";
+    if (body.id !== "sun" && sun) {
+      const elements = stateToOsculatingElements(
+        subtract(body.positionM, sun.positionM),
+        subtract(body.velocityMps, sun.velocityMps),
+        sun.massKg + body.massKg,
+        J2000_JULIAN_DAY,
+      );
+      const period = 2 * Math.PI * Math.sqrt(
+        elements.semiMajorAxisM ** 3 /
+          (GRAVITATIONAL_CONSTANT * (sun.massKg + body.massKg)),
+      );
+      orbitalText = `Sun distance: ${(magnitude(subtract(body.positionM, sun.positionM)) / ASTRONOMICAL_UNIT_M).toFixed(3)} AU<br>Orbital period: ${formatPeriod(period)}`;
+    }
     selectedBodyElement.innerHTML = `
       <strong>${body.name}</strong>
       <span>
         ${body.category}<br>
-        Mass: ${body.massKg.toExponential(3)} kg<br>
+        Parent: ${body.id === "sun" ? "None" : "Sun"}<br>
         Radius: ${(body.radiusM / 1_000).toLocaleString(undefined, { maximumFractionDigits: 0 })} km<br>
-        Barycentric distance: ${distanceAu.toFixed(3)} AU<br>
-        Speed: ${speedKps.toFixed(2)} km/s
+        Surface gravity: ${facts?.surfaceGravityMps2?.toFixed(3) ?? "Unknown"} m/s²<br>
+        ${orbitalText}<br>
+        Live speed: ${(magnitude(body.velocityMps) / 1_000).toFixed(2)} km/s<br>
+        Discovery: ${facts?.discovery ?? "Unknown"}<br><br>
+        ${facts?.significance ?? ""}
       </span>
     `;
     return;
   }
-  const comet = cometStates.find((candidate) => candidate.body.id === id);
-  if (!comet) return;
-  const distanceAu = magnitude(comet.positionM) / ASTRONOMICAL_UNIT_M;
-  const speedKps = magnitude(comet.velocityMps) / 1_000;
-  const semiMajorAxisAu = comet.body.elements.semiMajorAxisM / ASTRONOMICAL_UNIT_M;
-  const perihelionAu = semiMajorAxisAu * (1 - comet.body.elements.eccentricity);
-  const aphelionAu = semiMajorAxisAu * (1 + comet.body.elements.eccentricity);
+
+  const state = orbitalStates.find((candidate) => candidate.body.id === id);
+  if (!state) return;
+  const definition = state.body;
+  const period = 2 * Math.PI * Math.sqrt(
+    definition.elements.semiMajorAxisM ** 3 /
+      (GRAVITATIONAL_CONSTANT * (parentMassKg(definition.parentId) + definition.massKg)),
+  );
+  const gravity =
+    definition.facts.surfaceGravityMps2 ??
+    (GRAVITATIONAL_CONSTANT * definition.massKg) / definition.radiusM ** 2;
+  const distance = magnitude(state.relativePositionM);
+  const distanceText =
+    definition.category === "moon"
+      ? `${(distance / 1_000).toLocaleString(undefined, { maximumFractionDigits: 0 })} km`
+      : `${(distance / ASTRONOMICAL_UNIT_M).toFixed(3)} AU`;
   selectedBodyElement.innerHTML = `
-    <strong>${comet.body.name}</strong>
+    <strong>${definition.name}</strong>
     <span>
-      comet | massless test particle<br>
-      Heliocentric distance: ${distanceAu.toFixed(3)} AU<br>
-      Speed: ${speedKps.toFixed(2)} km/s<br>
-      Perihelion / aphelion: ${perihelionAu.toFixed(3)} / ${aphelionAu.toFixed(1)} AU<br>
-      Source: NASA/JPL SBDB
+      ${definition.category} | massless simulation body<br>
+      Parent: ${namesById.get(definition.parentId) ?? definition.parentId}<br>
+      Radius: ${(definition.radiusM / 1_000).toLocaleString(undefined, { maximumFractionDigits: 1 })} km<br>
+      Surface gravity: ${gravity.toFixed(4)} m/s²<br>
+      Parent distance: ${distanceText}<br>
+      Orbital period: ${formatPeriod(period)}<br>
+      Live relative speed: ${(magnitude(state.relativeVelocityMps) / 1_000).toFixed(2)} km/s<br>
+      Discovery: ${definition.facts.discovery}<br><br>
+      ${definition.facts.significance}
     </span>
   `;
+}
+
+function selectAndFollow(id: string): void {
+  renderer.selectBody(id);
+  renderer.focusBody(id, true);
+  updateSelectedBody(id);
+  renderNavigator();
+}
+
+function renderNavigator(): void {
+  filteredNavigatorEntries = filterNavigatorEntries(navigatorEntries, searchInput.value);
+  activeNavigatorIndex = Math.min(
+    activeNavigatorIndex,
+    Math.max(filteredNavigatorEntries.length - 1, 0),
+  );
+  const groups = groupNavigatorEntries(filteredNavigatorEntries);
+  searchResults.replaceChildren();
+  let resultIndex = 0;
+  for (const [category, entries] of groups) {
+    const heading = document.createElement("div");
+    heading.className = "navigator-group";
+    heading.textContent = GROUP_LABELS[category] ?? category;
+    searchResults.append(heading);
+    for (const entry of entries) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "navigator-result";
+      if (resultIndex === activeNavigatorIndex) button.classList.add("active");
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", String(entry.id === selectedBodyId));
+      const name = document.createElement("span");
+      name.textContent = entry.name;
+      const parent = document.createElement("small");
+      parent.textContent = entry.parentName ?? entry.category;
+      button.append(name, parent);
+      button.addEventListener("click", () => selectAndFollow(entry.id));
+      searchResults.append(button);
+      resultIndex += 1;
+    }
+  }
+  searchInput.setAttribute(
+    "aria-expanded",
+    String(filteredNavigatorEntries.length > 0),
+  );
+  searchResults.querySelector<HTMLElement>(".navigator-result.active")?.scrollIntoView({
+    block: "nearest",
+  });
 }
 
 function updateRunningUi(): void {
@@ -139,13 +292,15 @@ function updateRunningUi(): void {
 function reset(): void {
   simulation.reset();
   accumulatorSeconds = 0;
-  cometStates = calculateCometStates(0);
+  orbitalStates = calculateOrbitalStates(0);
   initialConserved = calculateConservedQuantities(simulation.bodies);
   lastDiagnosticsElapsed = Number.NEGATIVE_INFINITY;
   renderer.clearTrails();
-  renderer.update(simulation.bodies, cometStates, simulation.elapsedSeconds);
+  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
   renderer.selectBody("sun");
+  renderer.stopFollowing();
   updateSelectedBody("sun");
+  renderNavigator();
 }
 
 function updateTelemetry(stepsThisFrame: number): void {
@@ -156,12 +311,14 @@ function updateTelemetry(stepsThisFrame: number): void {
   stepsFrameElement.textContent = String(stepsThisFrame);
   if (elapsed - lastDiagnosticsElapsed >= 30 * DAY_SECONDS || elapsed === 0) {
     const current = calculateConservedQuantities(simulation.bodies);
-    const energyPpm = relativeDrift(current.energyJ, initialConserved.energyJ) * 1e6;
-    const initialAngular = magnitude(initialConserved.angularMomentumKgM2ps);
-    const currentAngular = magnitude(current.angularMomentumKgM2ps);
-    const angularPpm = relativeDrift(currentAngular, initialAngular) * 1e6;
-    energyDriftElement.textContent = `${energyPpm.toFixed(3)} ppm`;
-    momentumDriftElement.textContent = `${angularPpm.toFixed(3)} ppm`;
+    energyDriftElement.textContent =
+      `${(relativeDrift(current.energyJ, initialConserved.energyJ) * 1e6).toFixed(3)} ppm`;
+    momentumDriftElement.textContent = `${(
+      relativeDrift(
+        magnitude(current.angularMomentumKgM2ps),
+        magnitude(initialConserved.angularMomentumKgM2ps),
+      ) * 1e6
+    ).toFixed(3)} ppm`;
     lastDiagnosticsElapsed = elapsed;
   }
 }
@@ -171,8 +328,15 @@ toggleButton.addEventListener("click", () => {
   updateRunningUi();
 });
 resetButton.addEventListener("click", reset);
-fitButton.addEventListener("click", () => renderer.fitSystem());
-fitInnerButton.addEventListener("click", () => renderer.fitInnerSystem());
+fitButton.addEventListener("click", () => {
+  renderer.stopFollowing();
+  renderer.fitSystem();
+});
+fitInnerButton.addEventListener("click", () => {
+  renderer.stopFollowing();
+  renderer.fitInnerSystem();
+});
+stopFollowButton.addEventListener("click", () => renderer.stopFollowing());
 speedInput.addEventListener("input", () => {
   timeScale = TIME_SCALES[Number(speedInput.value)] ?? TIME_SCALES[3];
   speedValue.value = timeScale.label;
@@ -193,15 +357,44 @@ cometPathsInput.addEventListener("change", () =>
 cometTailsInput.addEventListener("change", () =>
   renderer.setCometTailsVisible(cometTailsInput.checked),
 );
+moonsInput.addEventListener("change", () => renderer.setMoonsVisible(moonsInput.checked));
 labelsInput.addEventListener("change", () => renderer.setLabelsVisible(labelsInput.checked));
 distanceScaleInput.addEventListener("input", () => {
   const scale = Number(distanceScaleInput.value);
   renderer.setDistanceScale(scale);
   distanceScaleValue.value = scale === 1 ? "1x physical" : `${scale}x all`;
 });
-renderer.onBodySelected((id) => {
-  updateSelectedBody(id);
-  renderer.focusBody(id);
+searchInput.addEventListener("input", () => {
+  activeNavigatorIndex = 0;
+  renderNavigator();
+});
+searchInput.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    activeNavigatorIndex = Math.min(
+      activeNavigatorIndex + 1,
+      filteredNavigatorEntries.length - 1,
+    );
+    renderNavigator();
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    activeNavigatorIndex = Math.max(activeNavigatorIndex - 1, 0);
+    renderNavigator();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const entry = filteredNavigatorEntries[activeNavigatorIndex];
+    if (entry) selectAndFollow(entry.id);
+  } else if (event.key === "Escape") {
+    searchInput.value = "";
+    activeNavigatorIndex = 0;
+    renderNavigator();
+    searchInput.blur();
+  }
+});
+renderer.onBodySelected(selectAndFollow);
+renderer.onFollowChanged((id) => {
+  stopFollowButton.hidden = id === undefined;
+  stopFollowButton.textContent = id ? `Stop Following ${namesById.get(id) ?? ""}` : "Stop Following";
 });
 
 function frame(now: number): void {
@@ -222,15 +415,17 @@ function frame(now: number): void {
       accumulatorSeconds = Math.min(accumulatorSeconds, simulation.fixedTimestepSeconds);
     }
   }
-  cometStates = calculateCometStates(simulation.elapsedSeconds);
-  renderer.update(simulation.bodies, cometStates, simulation.elapsedSeconds);
+  orbitalStates = calculateOrbitalStates(simulation.elapsedSeconds);
+  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
   renderer.render();
   updateTelemetry(stepsThisFrame);
+  if (selectedBodyId !== "sun") updateSelectedBody(selectedBodyId);
   requestAnimationFrame(frame);
 }
 
 renderer.selectBody("sun");
-renderer.update(simulation.bodies, cometStates, 0);
+renderer.update(simulation.bodies, orbitalStates, 0);
 updateSelectedBody("sun");
 updateRunningUi();
+renderNavigator();
 requestAnimationFrame(frame);

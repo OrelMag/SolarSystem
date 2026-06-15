@@ -12,7 +12,9 @@ export const COMETS: readonly MasslessOrbitalBody[] = [
   {
     id: "1p-halley",
     name: "1P/Halley",
+    parentId: "sun",
     category: "comet",
+    massKg: 2.2e14,
     radiusM: 5_500,
     visual: { color: 0xbdeeff },
     elements: makeElementsFromDegrees({
@@ -25,11 +27,18 @@ export const COMETS: readonly MasslessOrbitalBody[] = [
       epochJulianDay: 2_439_875.5,
     }),
     source: source("1P", 2_439_875.5),
+    facts: {
+      discovery: "Recorded since antiquity; periodicity identified by Edmond Halley in 1705.",
+      significance: "The best-known periodic comet, returning roughly every 76 years.",
+      surfaceGravityMps2: 0.0005,
+    },
   },
   {
     id: "c1995-o1-hale-bopp",
     name: "C/1995 O1 Hale-Bopp",
+    parentId: "sun",
     category: "comet",
+    massKg: 1e16,
     radiusM: 30_000,
     visual: { color: 0xd9f7ff },
     elements: makeElementsFromDegrees({
@@ -42,11 +51,17 @@ export const COMETS: readonly MasslessOrbitalBody[] = [
       epochJulianDay: 2_459_837.5,
     }),
     source: source("C/1995 O1", 2_459_837.5),
+    facts: {
+      discovery: "Discovered independently by Alan Hale and Thomas Bopp in 1995.",
+      significance: "One of the most widely observed bright comets of the twentieth century.",
+    },
   },
   {
     id: "2p-encke",
     name: "2P/Encke",
+    parentId: "sun",
     category: "comet",
+    massKg: 2.5e13,
     radiusM: 2_400,
     visual: { color: 0x9de4ee },
     elements: makeElementsFromDegrees({
@@ -59,11 +74,17 @@ export const COMETS: readonly MasslessOrbitalBody[] = [
       epochJulianDay: 2_459_847.5,
     }),
     source: source("2P", 2_459_847.5),
+    facts: {
+      discovery: "Its short period was calculated by Johann Franz Encke in 1819.",
+      significance: "It has the shortest known orbital period of a bright periodic comet.",
+    },
   },
   {
     id: "67p-churyumov-gerasimenko",
     name: "67P/Churyumov-Gerasimenko",
+    parentId: "sun",
     category: "comet",
+    massKg: 9.98e12,
     radiusM: 2_000,
     visual: { color: 0xa5dfe8 },
     elements: makeElementsFromDegrees({
@@ -76,5 +97,10 @@ export const COMETS: readonly MasslessOrbitalBody[] = [
       epochJulianDay: 2_457_305.5,
     }),
     source: source("67P", 2_457_305.5),
+    facts: {
+      discovery: "Discovered by Klim Churyumov and Svetlana Gerasimenko in 1969.",
+      significance: "Rosetta orbited it and Philae made the first landing on a comet nucleus.",
+      surfaceGravityMps2: 0.0002,
+    },
   },
 ];

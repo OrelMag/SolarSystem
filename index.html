@@ -37,6 +37,21 @@
           <div class="speed-labels"><span>1 hour/s</span><span>1 year/s</span></div>
         </section>
 
+        <section class="control-section navigator-section">
+          <div class="section-heading"><span>Body Navigator</span></div>
+          <label class="sr-only" for="body-search">Search bodies</label>
+          <input
+            id="body-search"
+            class="search-input"
+            type="search"
+            placeholder="Search planets, moons, comets..."
+            autocomplete="off"
+            aria-controls="body-results"
+            aria-expanded="true"
+          />
+          <div id="body-results" class="body-results" role="listbox"></div>
+        </section>
+
         <section class="control-section">
           <div class="section-heading"><span>View Layers</span></div>
           <label class="check-row"><input id="trails" type="checkbox" checked /><span>Historical trails</span></label>
@@ -45,6 +60,7 @@
           <label class="check-row"><input id="kuiper-belt" type="checkbox" checked /><span>Kuiper belt</span></label>
           <label class="check-row"><input id="comet-paths" type="checkbox" checked /><span>Comet paths</span></label>
           <label class="check-row"><input id="comet-tails" type="checkbox" checked /><span>Comet tails</span></label>
+          <label class="check-row"><input id="moons-toggle" type="checkbox" checked /><span>Major moons</span></label>
           <label class="check-row"><input id="labels-toggle" type="checkbox" checked /><span>Body labels</span></label>
           <label for="distance-scale">
             Distance scale
@@ -74,8 +90,9 @@
           <div class="section-heading"><span>Selected Body</span></div>
           <div id="selected-body">
             <strong>Sun</strong>
-            <span>Click a planet or comet to inspect it.</span>
+            <span>Search for or click a body to inspect it.</span>
           </div>
+          <button id="stop-follow" type="button" hidden>Stop Following</button>
         </section>
 
         <footer>

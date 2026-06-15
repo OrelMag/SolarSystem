@@ -15,10 +15,20 @@ export interface OrbitalState {
   readonly velocityMps: Vector3;
 }
 
-export interface MasslessOrbitalBody {
+export type OrbitalBodyCategory = "comet" | "dwarf-planet" | "moon";
+
+export interface EducationalFacts {
+  readonly discovery: string;
+  readonly significance: string;
+  readonly surfaceGravityMps2?: number;
+}
+
+export interface HierarchicalOrbitalBody {
   readonly id: string;
   readonly name: string;
-  readonly category: "comet";
+  readonly parentId: string;
+  readonly category: OrbitalBodyCategory;
+  readonly massKg: number;
   readonly radiusM: number;
   readonly visual: {
     readonly color: number;
@@ -30,13 +40,22 @@ export interface MasslessOrbitalBody {
     readonly solutionEpochJulianDay: number;
     readonly referenceFrame: string;
   };
+  readonly facts: EducationalFacts;
 }
 
-export interface MasslessBodyState {
-  readonly body: MasslessOrbitalBody;
+export type MasslessOrbitalBody = HierarchicalOrbitalBody;
+
+export interface HierarchicalBodyState {
+  readonly body: HierarchicalOrbitalBody;
   readonly positionM: Vector3;
   readonly velocityMps: Vector3;
+  readonly parentPositionM: Vector3;
+  readonly parentVelocityMps: Vector3;
+  readonly relativePositionM: Vector3;
+  readonly relativeVelocityMps: Vector3;
 }
+
+export type MasslessBodyState = HierarchicalBodyState;
 
 export interface ParticleBeltDefinition {
   readonly id: "main-belt" | "kuiper-belt";
