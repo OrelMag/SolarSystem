@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="A data-driven Newtonian simulation of the Solar System."
+    />
+    <title>Orrery / Solar System Simulation</title>
+  </head>
+  <body>
+    <main id="app">
+      <section class="viewport" aria-label="Solar System simulation">
+        <div id="scene"></div>
+        <div class="brand">
+          <span class="eyebrow">NEWTONIAN ORRERY</span>
+          <h1>Solar System</h1>
+          <p>Top-down heliocentric view</p>
+        </div>
+        <div id="labels" aria-hidden="true"></div>
+        <div class="hint">Drag to pan · Scroll to zoom · Click a body to focus</div>
+      </section>
+
+      <aside class="panel">
+        <section class="control-section">
+          <div class="section-heading">
+            <span>Simulation</span>
+            <span id="status" class="status">RUNNING</span>
+          </div>
+          <div class="button-row">
+            <button id="toggle" class="primary" type="button">Pause</button>
+            <button id="reset" type="button">Reset</button>
+          </div>
+          <label for="speed">Time scale <output id="speed-value">30 days/s</output></label>
+          <input id="speed" type="range" min="0" max="6" step="1" value="3" />
+          <div class="speed-labels"><span>1 hour/s</span><span>1 year/s</span></div>
+        </section>
+
+        <section class="control-section">
+          <div class="section-heading"><span>View</span></div>
+          <label class="check-row">
+            <input id="trails" type="checkbox" checked />
+            <span>Orbital trails</span>
+          </label>
+          <label class="check-row">
+            <input id="labels-toggle" type="checkbox" checked />
+            <span>Body labels</span>
+          </label>
+          <button id="fit" type="button">Fit Solar System</button>
+        </section>
+
+        <section class="control-section diagnostics">
+          <div class="section-heading"><span>Telemetry</span></div>
+          <dl>
+            <div><dt>Epoch</dt><dd id="date">2000-01-01</dd></div>
+            <div><dt>Elapsed</dt><dd id="elapsed">0.00 days</dd></div>
+            <div><dt>Physics step</dt><dd id="step">3 hours</dd></div>
+            <div><dt>Energy drift</dt><dd id="energy-drift">0.00 ppm</dd></div>
+            <div><dt>Angular momentum</dt><dd id="momentum-drift">0.00 ppm</dd></div>
+            <div><dt>Steps / frame</dt><dd id="steps-frame">0</dd></div>
+          </dl>
+        </section>
+
+        <section class="control-section selected">
+          <div class="section-heading"><span>Selected Body</span></div>
+          <div id="selected-body">
+            <strong>Sun</strong>
+            <span>Click a planet to inspect it.</span>
+          </div>
+        </section>
+
+        <footer>
+          SI-unit N-body simulation · Initial state based on J2000 orbital
+          elements from NASA/JPL
+        </footer>
+      </aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
