@@ -19,7 +19,7 @@
           <p>Top-down heliocentric view</p>
         </div>
         <div id="labels" aria-hidden="true"></div>
-        <div class="hint">Drag to pan · Scroll to zoom · Click a body to focus</div>
+        <div class="hint">Drag to pan &middot; Scroll to zoom &middot; Click a body to focus</div>
       </section>
 
       <aside class="panel">
@@ -38,16 +38,18 @@
         </section>
 
         <section class="control-section">
-          <div class="section-heading"><span>View</span></div>
-          <label class="check-row">
-            <input id="trails" type="checkbox" checked />
-            <span>Orbital trails</span>
-          </label>
-          <label class="check-row">
-            <input id="labels-toggle" type="checkbox" checked />
-            <span>Body labels</span>
-          </label>
-          <button id="fit" type="button">Fit Solar System</button>
+          <div class="section-heading"><span>View Layers</span></div>
+          <label class="check-row"><input id="trails" type="checkbox" checked /><span>Historical trails</span></label>
+          <label class="check-row"><input id="planet-paths" type="checkbox" checked /><span>Planet paths</span></label>
+          <label class="check-row"><input id="main-belt" type="checkbox" checked /><span>Main asteroid belt</span></label>
+          <label class="check-row"><input id="kuiper-belt" type="checkbox" checked /><span>Kuiper belt</span></label>
+          <label class="check-row"><input id="comet-paths" type="checkbox" checked /><span>Comet paths</span></label>
+          <label class="check-row"><input id="comet-tails" type="checkbox" checked /><span>Comet tails</span></label>
+          <label class="check-row"><input id="labels-toggle" type="checkbox" checked /><span>Body labels</span></label>
+          <div class="button-row view-buttons">
+            <button id="fit-inner" type="button">Inner System</button>
+            <button id="fit" type="button">Full System</button>
+          </div>
         </section>
 
         <section class="control-section diagnostics">
@@ -66,13 +68,12 @@
           <div class="section-heading"><span>Selected Body</span></div>
           <div id="selected-body">
             <strong>Sun</strong>
-            <span>Click a planet to inspect it.</span>
+            <span>Click a planet or comet to inspect it.</span>
           </div>
         </section>
 
         <footer>
-          SI-unit N-body simulation · Initial state based on J2000 orbital
-          elements from NASA/JPL
+          SI-unit N-body simulation &middot; Planet and small-body elements from NASA/JPL
         </footer>
       </aside>
     </main>
