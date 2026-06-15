@@ -15,6 +15,11 @@ import {
   sampleOrbitPath,
   stateToOsculatingElements,
 } from "../physics/orbitalMechanics";
+import {
+  DEFAULT_DISTANCE_SCALE,
+  scaleDistanceForDisplay,
+  type DistanceScaleConfig,
+} from "./distanceScale";
 
 const MAX_TRAIL_POINTS = 900;
 const TRAIL_SAMPLE_SECONDS = 10 * DAY_SECONDS;
@@ -59,6 +64,7 @@ export class SolarSystemRenderer {
   private planetPathsVisible = true;
   private cometPathsVisible = true;
   private cometTailsVisible = true;
+  private distanceScale: DistanceScaleConfig = DEFAULT_DISTANCE_SCALE;
   private selectionHandler: ((id: string) => void) | undefined;
   private lastOrbitRefreshSeconds = Number.NEGATIVE_INFINITY;
 
@@ -184,6 +190,14 @@ export class SolarSystemRenderer {
     this.labelsContainer.style.display = visible ? "block" : "none";
   }
 
+  setInnerDistanceScale(innerScale: number): void {
+    this.distanceScale = {
+      innerScale,
+      transitionRadiusAu: DEFAULT_DISTANCE_SCALE.transitionRadiusAu,
+    };
+    this.clearTrails();
+  }
+
   selectBody(id: string): void {
     for (const [bodyId, view] of this.bodyViews) {
       this.styleSelection(view.mesh, view.label, bodyId === id);
@@ -304,11 +318,10 @@ export class SolarSystemRenderer {
           this.centralMassKg,
         );
         const offset = index * 3;
-        belt.positions[offset] = state.positionM.x / ASTRONOMICAL_UNIT_M + sunScenePosition.x;
-        belt.positions[offset + 1] =
-          state.positionM.y / ASTRONOMICAL_UNIT_M + sunScenePosition.y;
-        belt.positions[offset + 2] =
-          state.positionM.z / ASTRONOMICAL_UNIT_M + sunScenePosition.z;
+        const displayPosition = this.toScenePosition(state.positionM);
+        belt.positions[offset] = displayPosition.x + sunScenePosition.x;
+        belt.positions[offset + 1] = displayPosition.y + sunScenePosition.y;
+        belt.positions[offset + 2] = displayPosition.z + sunScenePosition.z;
       }
       const attribute = belt.points.geometry.getAttribute("position");
       if (attribute instanceof THREE.BufferAttribute) attribute.needsUpdate = true;
@@ -513,10 +526,11 @@ export class SolarSystemRenderer {
   };
 
   private toScenePosition(positionM: { x: number; y: number; z: number }): THREE.Vector3 {
+    const displayPosition = scaleDistanceForDisplay(positionM, this.distanceScale);
     return new THREE.Vector3(
-      positionM.x / ASTRONOMICAL_UNIT_M,
-      positionM.y / ASTRONOMICAL_UNIT_M,
-      positionM.z / ASTRONOMICAL_UNIT_M,
+      displayPosition.x / ASTRONOMICAL_UNIT_M,
+      displayPosition.y / ASTRONOMICAL_UNIT_M,
+      displayPosition.z / ASTRONOMICAL_UNIT_M,
     );
   }
 }

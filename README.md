@@ -51,5 +51,7 @@ trajectories or conservation diagnostics.
 - Toggle historical trails, live planet paths, either belt, comet paths, comet
   tails, and labels independently.
 - Switch between inner-system and full Kuiper-belt framing.
+- Expand inner-system distances up to 8x for readability without changing any
+  physical state or orbital calculation.
 
 See [AGENTS.md](./AGENTS.md) for architecture, extension, and validation rules.

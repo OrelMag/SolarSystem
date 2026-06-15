@@ -68,6 +68,8 @@ const kuiperBeltInput = requireElement<HTMLInputElement>("kuiper-belt");
 const cometPathsInput = requireElement<HTMLInputElement>("comet-paths");
 const cometTailsInput = requireElement<HTMLInputElement>("comet-tails");
 const labelsInput = requireElement<HTMLInputElement>("labels-toggle");
+const distanceScaleInput = requireElement<HTMLInputElement>("distance-scale");
+const distanceScaleValue = requireElement<HTMLOutputElement>("distance-scale-value");
 const statusElement = requireElement("status");
 const dateElement = requireElement("date");
 const elapsedElement = requireElement("elapsed");
@@ -192,6 +194,11 @@ cometTailsInput.addEventListener("change", () =>
   renderer.setCometTailsVisible(cometTailsInput.checked),
 );
 labelsInput.addEventListener("change", () => renderer.setLabelsVisible(labelsInput.checked));
+distanceScaleInput.addEventListener("input", () => {
+  const scale = Number(distanceScaleInput.value);
+  renderer.setInnerDistanceScale(scale);
+  distanceScaleValue.value = scale === 1 ? "1x physical" : `${scale}x inner`;
+});
 renderer.onBodySelected((id) => {
   updateSelectedBody(id);
   renderer.focusBody(id);
