@@ -1,6 +1,12 @@
 import type { Vector3 } from "./vector";
 
-export type BodyCategory = "star" | "planet" | "moon" | "dwarf-planet" | "minor-body";
+export type BodyCategory =
+  | "star"
+  | "planet"
+  | "moon"
+  | "dwarf-planet"
+  | "minor-body"
+  | "spacecraft";
 
 export interface BodyVisual {
   readonly color: number;

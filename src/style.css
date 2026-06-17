@@ -150,6 +150,18 @@ dt,
   color: #e6b35b;
 }
 
+.status.en-route {
+  color: #8ee8ff;
+}
+
+.status.arrived {
+  color: #6fd6a2;
+}
+
+.status.missed {
+  color: #ffb36b;
+}
+
 .button-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

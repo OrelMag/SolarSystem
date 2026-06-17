@@ -108,4 +108,52 @@ describe("NBodySimulation", () => {
         }),
     ).toThrow(/unique/);
   });
+
+  it("adds and removes validated runtime bodies without changing the reset baseline", () => {
+    const simulation = new NBodySimulation(createCircularBinary(), {
+      fixedTimestepSeconds: 10,
+      minimumDistanceM: 1,
+    });
+    const spacecraft: CelestialBody = {
+      id: "spacecraft",
+      name: "Spacecraft",
+      category: "spacecraft",
+      massKg: 1_000,
+      radiusM: 10,
+      positionM: vector(2e9, 0, 0),
+      velocityMps: vector(0, 1_000, 0),
+      visual: { color: 0x8ee8ff },
+    };
+
+    simulation.addRuntimeBody(spacecraft);
+    expect(simulation.bodies.map((body) => body.id)).toContain("spacecraft");
+    expect(() => simulation.addRuntimeBody(spacecraft)).toThrow(/unique/);
+    expect(simulation.removeRuntimeBody("planet")).toBe(false);
+    expect(simulation.removeRuntimeBody("spacecraft")).toBe(true);
+    expect(simulation.bodies.map((body) => body.id)).not.toContain("spacecraft");
+
+    simulation.addRuntimeBody(spacecraft);
+    simulation.reset();
+    expect(simulation.bodies.map((body) => body.id)).toEqual(["star", "planet"]);
+  });
+
+  it("validates runtime body state", () => {
+    const simulation = new NBodySimulation(createCircularBinary(), {
+      fixedTimestepSeconds: 10,
+      minimumDistanceM: 1,
+    });
+
+    expect(() =>
+      simulation.addRuntimeBody({
+        id: "spacecraft",
+        name: "Spacecraft",
+        category: "spacecraft",
+        massKg: 0,
+        radiusM: 10,
+        positionM: vector(0, 0, 0),
+        velocityMps: vector(0, 0, 0),
+        visual: { color: 0x8ee8ff },
+      }),
+    ).toThrow(/positive mass/);
+  });
 });

@@ -99,9 +99,10 @@ function buildMassiveDetail(
   return {
     title: body.name,
     rows,
-    note:
-      facts?.significance ??
-      "This physical body participates directly in the N-body integration.",
+    note: body.category === "spacecraft"
+      ? "This launched spacecraft is an active N-body participant with negligible mission mass. It follows gravity after its initial injection."
+      : facts?.significance ??
+        "This physical body participates directly in the N-body integration.",
   };
 }
 

@@ -10,32 +10,44 @@ export interface SimulationConfig {
 function validateBodies(bodies: readonly CelestialBody[]): void {
   const identifiers = new Set<string>();
   for (const body of bodies) {
-    if (!body.id || identifiers.has(body.id)) {
+    validateBody(body);
+    if (identifiers.has(body.id)) {
       throw new Error(`Body identifiers must be unique and non-empty: "${body.id}".`);
-    }
-    if (!(body.massKg > 0) || !(body.radiusM > 0)) {
-      throw new Error(`Body "${body.id}" must have positive mass and radius.`);
-    }
-    if (!isFiniteVector(body.positionM) || !isFiniteVector(body.velocityMps)) {
-      throw new Error(`Body "${body.id}" has a non-finite state vector.`);
     }
     identifiers.add(body.id);
   }
 }
 
-function cloneBodies(bodies: readonly CelestialBody[]): MutableBodyState[] {
-  return bodies.map((body) => ({
+function validateBody(body: CelestialBody): void {
+  if (!body.id) {
+    throw new Error(`Body identifiers must be unique and non-empty: "${body.id}".`);
+  }
+  if (!(body.massKg > 0) || !(body.radiusM > 0)) {
+    throw new Error(`Body "${body.id}" must have positive mass and radius.`);
+  }
+  if (!isFiniteVector(body.positionM) || !isFiniteVector(body.velocityMps)) {
+    throw new Error(`Body "${body.id}" has a non-finite state vector.`);
+  }
+}
+
+function cloneBody(body: CelestialBody): MutableBodyState {
+  return {
     ...body,
     positionM: { ...body.positionM },
     velocityMps: { ...body.velocityMps },
     visual: { ...body.visual },
-  }));
+  };
+}
+
+function cloneBodies(bodies: readonly CelestialBody[]): MutableBodyState[] {
+  return bodies.map(cloneBody);
 }
 
 export class NBodySimulation {
   readonly fixedTimestepSeconds: number;
   private readonly minimumDistanceM: number;
   private readonly initialBodies: readonly CelestialBody[];
+  private readonly runtimeBodyIds = new Set<string>();
   private state: MutableBodyState[];
   private elapsed = 0;
 
@@ -90,8 +102,27 @@ export class NBodySimulation {
     }
   }
 
+  addRuntimeBody(body: CelestialBody): void {
+    validateBody(body);
+    if (this.state.some((candidate) => candidate.id === body.id)) {
+      throw new Error(`Body identifiers must be unique and non-empty: "${body.id}".`);
+    }
+    this.state.push(cloneBody(body));
+    this.runtimeBodyIds.add(body.id);
+  }
+
+  removeRuntimeBody(id: string): boolean {
+    if (!this.runtimeBodyIds.has(id)) return false;
+    const nextState = this.state.filter((body) => body.id !== id);
+    const removed = nextState.length !== this.state.length;
+    this.state = nextState;
+    this.runtimeBodyIds.delete(id);
+    return removed;
+  }
+
   reset(): void {
     this.state = cloneBodies(this.initialBodies);
+    this.runtimeBodyIds.clear();
     this.elapsed = 0;
   }
 

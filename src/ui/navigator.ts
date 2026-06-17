@@ -15,6 +15,7 @@ const GROUP_ORDER: readonly NavigatorCategory[] = [
   "planet",
   "dwarf-planet",
   "moon",
+  "spacecraft",
   "comet",
   "minor-body",
 ];

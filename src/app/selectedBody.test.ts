@@ -37,6 +37,35 @@ describe("selected body details", () => {
     expect(detail?.rows.some((row) => row.value === "Display-only massless body")).toBe(false);
   });
 
+  it("describes launched spacecraft as active N-body participants", () => {
+    const bodies = [
+      ...createSolarSystem(),
+      {
+        id: "spacecraft-active",
+        name: "Spacecraft",
+        category: "spacecraft" as const,
+        parentId: "earth",
+        massKg: 10_000,
+        radiusM: 10,
+        positionM: { x: 1, y: 0, z: 0 },
+        velocityMps: { x: 0, y: 1, z: 0 },
+        visual: { color: 0x8ee8ff },
+      },
+    ];
+    const names = new Map(bodies.map((body) => [body.id, body.name] as const));
+    const detail = buildSelectedBodyDetail({
+      id: "spacecraft-active",
+      massiveBodies: bodies,
+      orbitalStates: [],
+      namesById: names,
+      accelerationsById: new Map([["spacecraft-active", { x: 0.01, y: 0, z: 0 }]]),
+    });
+
+    expect(detail?.title).toBe("Spacecraft");
+    expect(detail?.rows).toContainEqual({ label: "Category", value: "spacecraft" });
+    expect(detail?.note).toContain("launched spacecraft");
+  });
+
   it("labels hierarchical bodies as display-only", () => {
     const bodies = createSolarSystem();
     const states = propagateHierarchicalBodies(EXPLORATION_BODIES, bodies, 2_451_545);

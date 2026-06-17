@@ -74,6 +74,25 @@ describe("calculateDeclutterVisibility", () => {
     expect(result.visibleIds.has("mercury")).toBe(true);
   });
 
+  it("keeps spacecraft markers visible when they overlap a planet", () => {
+    const result = calculateDeclutterVisibility(
+      [
+        baseItem,
+        {
+          ...baseItem,
+          id: "spacecraft-active",
+          category: "spacecraft",
+          markerRadiusPx: 7,
+          screenXPx: 104,
+        },
+      ],
+      { viewportWidthPx: 500, viewportHeightPx: 500, paddingPx: 4 },
+    );
+
+    expect(result.visibleIds.has("earth")).toBe(true);
+    expect(result.visibleIds.has("spacecraft-active")).toBe(true);
+  });
+
   it("keeps non-overlapping items visible", () => {
     const result = calculateDeclutterVisibility(
       [

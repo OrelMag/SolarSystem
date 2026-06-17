@@ -60,6 +60,25 @@
           </div>
         </section>
 
+        <section class="control-section launch-section">
+          <div class="section-heading">
+            <span>Launch</span>
+            <span id="launch-status" class="status">READY</span>
+          </div>
+          <label for="launch-target">Target</label>
+          <select id="launch-target"></select>
+          <div class="button-row">
+            <button id="launch-spacecraft" class="primary" type="button">Launch</button>
+            <button id="clear-spacecraft" type="button">Clear Craft</button>
+          </div>
+          <dl>
+            <div><dt>Distance</dt><dd id="launch-distance">-</dd></div>
+            <div><dt>Closest</dt><dd id="launch-closest">-</dd></div>
+            <div><dt>Estimate</dt><dd id="launch-estimate">-</dd></div>
+            <div><dt>Injection</dt><dd id="launch-injection">-</dd></div>
+          </dl>
+        </section>
+
         <section class="control-section navigator-section">
           <div class="section-heading"><span>Body Navigator</span></div>
           <label class="sr-only" for="body-search">Search bodies</label>

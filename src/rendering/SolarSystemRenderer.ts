@@ -186,6 +186,29 @@ export class SolarSystemRenderer {
     this.followChangeHandler = handler;
   }
 
+  addBody(body: Readonly<MutableBodyState>): void {
+    if (this.bodyViews.has(body.id)) {
+      throw new Error(`Renderer already has a body view for "${body.id}".`);
+    }
+    this.createBodyView(body);
+    this.lastOrbitRefreshSeconds = Number.NEGATIVE_INFINITY;
+    this.updateMarkerSizes();
+  }
+
+  removeBody(id: string): boolean {
+    const view = this.bodyViews.get(id);
+    if (!view) return false;
+    this.scene.remove(view.mesh, view.trail, view.orbit);
+    this.disposeObject(view.mesh);
+    this.disposeObject(view.trail);
+    this.disposeObject(view.orbit);
+    view.label.remove();
+    this.bodyViews.delete(id);
+    if (this.followBodyId === id) this.setFollowBody(undefined);
+    this.lastOrbitRefreshSeconds = Number.NEGATIVE_INFINITY;
+    return true;
+  }
+
   update(
     bodies: readonly Readonly<MutableBodyState>[],
     orbitalStates: readonly HierarchicalBodyState[],
@@ -205,7 +228,7 @@ export class SolarSystemRenderer {
       if (!view) continue;
       const scenePosition = this.bodyToScenePosition(body, bodies);
       view.mesh.position.copy(scenePosition);
-      if (body.category === "moon") {
+      if (this.usesLocalParentDisplay(body)) {
         const parent = body.parentId
           ? bodies.find((candidate) => candidate.id === body.parentId)
           : undefined;
@@ -534,28 +557,34 @@ export class SolarSystemRenderer {
 
   private createBodyViews(bodies: readonly Readonly<MutableBodyState>[]): void {
     for (const body of bodies) {
-      const visibleRadius = calculatePhysicalMarkerRadius(body.category, body.radiusM);
-      const mesh = this.createDisc(body.id, visibleRadius, body.visual.color);
-      mesh.userData.category = body.category;
-      mesh.userData.parentId = body.parentId;
-      if (body.id === "sun") this.addSunGlow(mesh, body.visual.emissive ?? body.visual.color);
-      if (body.id === "saturn") this.addSaturnRing(mesh, visibleRadius);
-      const label = this.createLabel(body.name);
-      const trail = this.createLine(body.visual.color, body.category === "star" ? 0.08 : 0.28);
-      const orbit = this.createLine(body.visual.color, body.category === "star" ? 0 : 0.18);
-      orbit.visible = body.id !== "sun";
-      this.bodyViews.set(body.id, {
-        mesh,
-        label,
-        trail,
-        orbit,
-        trailPoints: [],
-        baseWorldRadius: visibleRadius,
-        physicalRadiusM: body.radiusM,
-        category: body.category,
-        lastTrailSampleSeconds: Number.NEGATIVE_INFINITY,
-      });
+      this.createBodyView(body);
     }
+  }
+
+  private createBodyView(body: Readonly<MutableBodyState>): void {
+    const visibleRadius = calculatePhysicalMarkerRadius(body.category, body.radiusM);
+    const mesh = this.createDisc(body.id, visibleRadius, body.visual.color);
+    mesh.userData.category = body.category;
+    mesh.userData.parentId = body.parentId;
+    if (body.id === "sun") this.addSunGlow(mesh, body.visual.emissive ?? body.visual.color);
+    if (body.id === "saturn") this.addSaturnRing(mesh, visibleRadius);
+    const label = this.createLabel(body.name);
+    const trailOpacity = body.category === "star" ? 0.08 : body.category === "spacecraft" ? 0.55 : 0.28;
+    const orbitOpacity = body.category === "star" ? 0 : body.category === "spacecraft" ? 0.35 : 0.18;
+    const trail = this.createLine(body.visual.color, trailOpacity);
+    const orbit = this.createLine(body.visual.color, orbitOpacity);
+    orbit.visible = body.id !== "sun";
+    this.bodyViews.set(body.id, {
+      mesh,
+      label,
+      trail,
+      orbit,
+      trailPoints: [],
+      baseWorldRadius: visibleRadius,
+      physicalRadiusM: body.radiusM,
+      category: body.category,
+      lastTrailSampleSeconds: Number.NEGATIVE_INFINITY,
+    });
   }
 
   private createOrbitalViews(bodies: readonly HierarchicalOrbitalBody[]): void {
@@ -631,7 +660,7 @@ export class SolarSystemRenderer {
       if (body.id === "sun") continue;
       const view = this.bodyViews.get(body.id);
       if (!view) continue;
-      if (body.category === "moon") {
+      if (this.usesLocalParentDisplay(body)) {
         const parent = body.parentId
           ? bodies.find((candidate) => candidate.id === body.parentId)
           : undefined;
@@ -723,7 +752,7 @@ export class SolarSystemRenderer {
     body: Readonly<MutableBodyState>,
     bodies: readonly Readonly<MutableBodyState>[],
   ): THREE.Vector3 {
-    if (body.category !== "moon" || !body.parentId) return this.toScenePosition(body.positionM);
+    if (!this.usesLocalParentDisplay(body) || !body.parentId) return this.toScenePosition(body.positionM);
     const parent = bodies.find((candidate) => candidate.id === body.parentId);
     if (!parent) return this.toScenePosition(body.positionM);
     return this.toScenePosition(parent.positionM).add(
@@ -741,6 +770,10 @@ export class SolarSystemRenderer {
       (positionM.y / ASTRONOMICAL_UNIT_M) * LOCAL_ORBIT_DISPLAY_SCALE,
       (positionM.z / ASTRONOMICAL_UNIT_M) * LOCAL_ORBIT_DISPLAY_SCALE,
     );
+  }
+
+  private usesLocalParentDisplay(body: Readonly<MutableBodyState>): boolean {
+    return body.category === "moon" || (body.category === "spacecraft" && !!body.parentId);
   }
 
   private updateMoonVisibility(): void {
@@ -1047,6 +1080,20 @@ export class SolarSystemRenderer {
     line.renderOrder = 0;
     this.scene.add(line);
     return line;
+  }
+
+  private disposeObject(object: THREE.Object3D): void {
+    object.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+        child.geometry.dispose();
+        const material = child.material;
+        if (Array.isArray(material)) {
+          for (const entry of material) entry.dispose();
+        } else {
+          material.dispose();
+        }
+      }
+    });
   }
 
   private addSunGlow(mesh: THREE.Mesh, color: number): void {

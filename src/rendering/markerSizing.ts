@@ -46,6 +46,7 @@ const READABLE_RADIUS_PX: Readonly<Record<MarkerCategory, number>> = {
   moon: 8,
   "dwarf-planet": 10,
   "minor-body": 8,
+  spacecraft: 9,
   comet: 10,
 };
 
@@ -59,6 +60,7 @@ export function calculatePhysicalMarkerRadius(category: MarkerCategory, radiusM:
   if (category === "moon") {
     return Math.max(0.055, Math.min(0.13, Math.log10(radiusM) * 0.035 - 0.08));
   }
+  if (category === "spacecraft") return 0.11;
   if (category === "dwarf-planet") return 0.15;
   if (category === "comet") return 0.13;
   return Math.max(0.11, Math.min(0.38, Math.log10(radiusM) * 0.075 - 0.35));
