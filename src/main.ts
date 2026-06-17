@@ -4,6 +4,7 @@ import {
   sparkline,
 } from "./app/diagnosticsHistory";
 import {
+  formatDuration,
   formatElapsed,
   formatVector,
 } from "./app/format";
@@ -457,7 +458,7 @@ function updateTelemetry(stepsThisFrame: number, clamped: boolean): void {
   const currentDate = new Date(new Date(J2000_ISO).getTime() + elapsed * 1_000);
   dateElement.textContent = currentDate.toISOString().slice(0, 10);
   elapsedElement.textContent = formatElapsed(elapsed);
-  stepElement.textContent = `${DEFAULT_FIXED_TIMESTEP_SECONDS / 3_600} hours`;
+  stepElement.textContent = formatDuration(DEFAULT_FIXED_TIMESTEP_SECONDS);
   timeScaleElement.textContent = speedValue.value;
   maxStepsElement.textContent = String(DEFAULT_MAX_STEPS_PER_FRAME);
   catchupElement.textContent = clamped ? "Clamped" : "Idle";

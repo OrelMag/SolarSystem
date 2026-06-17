@@ -29,6 +29,13 @@ export function formatElapsed(seconds: number): string {
   return `${(days / 365.25).toFixed(3)} years`;
 }
 
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds.toLocaleString()} seconds`;
+  if (seconds < 3_600) return `${(seconds / 60).toLocaleString()} minutes`;
+  if (seconds < DAY_SECONDS) return `${(seconds / 3_600).toLocaleString()} hours`;
+  return `${(seconds / DAY_SECONDS).toLocaleString()} days`;
+}
+
 export function formatVector(value: Vector3, unit: string, scale = 1): string {
   const x = value.x / scale;
   const y = value.y / scale;
