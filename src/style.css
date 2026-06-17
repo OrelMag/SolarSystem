@@ -20,7 +20,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -199,6 +200,18 @@ input[type="range"] {
   accent-color: #e6b35b;
 }
 
+select,
+input[type="number"] {
+  width: 100%;
+  min-height: 38px;
+  margin: 8px 0 14px;
+  padding: 8px 10px;
+  border: 1px solid #303747;
+  border-radius: 3px;
+  color: #d5dae4;
+  background: #10141d;
+}
+
 .search-input {
   width: 100%;
   min-height: 38px;
@@ -297,6 +310,10 @@ input[type="range"] {
   font-size: 11px;
 }
 
+.view-buttons {
+  grid-template-columns: 1fr 1fr;
+}
+
 dl {
   display: grid;
   gap: 11px;
@@ -324,7 +341,7 @@ dd {
 
 #selected-body {
   display: grid;
-  gap: 7px;
+  gap: 10px;
 }
 
 #selected-body strong {
@@ -336,6 +353,38 @@ dd {
   color: #747d8e;
   font-size: 11px;
   line-height: 1.6;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.detail-grid div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.detail-grid dt {
+  align-self: start;
+}
+
+.detail-grid dd {
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.detail-note {
+  color: #747d8e;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.diagnostics.warning .section-heading,
+#diagnostic-status.warning {
+  color: #ffb36b;
 }
 
 footer {

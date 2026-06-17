@@ -32,9 +32,19 @@
             <button id="toggle" class="primary" type="button">Pause</button>
             <button id="reset" type="button">Reset</button>
           </div>
-          <label for="speed">Time scale <output id="speed-value">30 days/s</output></label>
-          <input id="speed" type="range" min="0" max="6" step="1" value="3" />
-          <div class="speed-labels"><span>1 hour/s</span><span>1 year/s</span></div>
+          <label for="scenario">Scenario</label>
+          <select id="scenario"></select>
+          <label for="speed-select">Time scale <output id="speed-value">30 days/s</output></label>
+          <select id="speed-select">
+            <option value="paused">Paused</option>
+            <option value="1">Real time</option>
+            <option value="3600">1 hour/s</option>
+            <option value="86400">1 day/s</option>
+            <option value="2592000" selected>30 days/s</option>
+            <option value="31557600">1 year/s</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input id="custom-speed" type="number" min="1" step="1" value="2592000" hidden />
         </section>
 
         <section class="control-section navigator-section">
@@ -53,8 +63,39 @@
         </section>
 
         <section class="control-section">
+          <div class="section-heading"><span>View & Camera</span></div>
+          <label for="view-frame">Reference frame</label>
+          <select id="view-frame">
+            <option value="barycentric">Barycentric</option>
+            <option value="sun-centered">Sun-centered</option>
+            <option value="selected-centered">Selected-centered</option>
+          </select>
+          <div class="button-row view-buttons">
+            <button id="focus-sun" type="button">Focus Sun</button>
+            <button id="focus-selected" type="button">Focus Selected</button>
+            <button id="show-all" type="button">Show All</button>
+            <button id="fit-inner" type="button">Inner System</button>
+          </div>
+          <button id="fit" type="button">Full System</button>
+        </section>
+
+        <section class="control-section">
           <div class="section-heading"><span>View Layers</span></div>
-          <label class="check-row"><input id="trails" type="checkbox" checked /><span>Historical trails</span></label>
+          <label for="trail-mode">Trails</label>
+          <select id="trail-mode">
+            <option value="all">All massive bodies</option>
+            <option value="planets">Planets only</option>
+            <option value="selected">Selected only</option>
+            <option value="off">Off</option>
+          </select>
+          <label for="trail-length">Trail length</label>
+          <select id="trail-length">
+            <option value="short">Short</option>
+            <option value="medium" selected>Medium</option>
+            <option value="long">Long</option>
+          </select>
+          <button id="clear-trails" type="button">Clear Trails</button>
+          <label class="check-row"><input id="trails" type="checkbox" checked /><span>Historical trails enabled</span></label>
           <label class="check-row"><input id="planet-paths" type="checkbox" checked /><span>Planet paths</span></label>
           <label class="check-row"><input id="main-belt" type="checkbox" checked /><span>Main asteroid belt</span></label>
           <label class="check-row"><input id="kuiper-belt" type="checkbox" checked /><span>Kuiper belt</span></label>
@@ -68,10 +109,6 @@
           </label>
           <input id="distance-scale" type="range" min="1" max="8" step="1" value="1" />
           <div class="speed-labels"><span>Physical</span><span>All expanded</span></div>
-          <div class="button-row view-buttons">
-            <button id="fit-inner" type="button">Inner System</button>
-            <button id="fit" type="button">Full System</button>
-          </div>
         </section>
 
         <section class="control-section diagnostics">
@@ -80,9 +117,18 @@
             <div><dt>Epoch</dt><dd id="date">2000-01-01</dd></div>
             <div><dt>Elapsed</dt><dd id="elapsed">0.00 days</dd></div>
             <div><dt>Physics step</dt><dd id="step">3 hours</dd></div>
+            <div><dt>Time scale</dt><dd id="time-scale">30 days/s</dd></div>
+            <div><dt>Max steps</dt><dd id="max-steps">80</dd></div>
+            <div><dt>Catch-up clamp</dt><dd id="catchup">Idle</dd></div>
             <div><dt>Energy drift</dt><dd id="energy-drift">0.00 ppm</dd></div>
-            <div><dt>Angular momentum</dt><dd id="momentum-drift">0.00 ppm</dd></div>
+            <div><dt>Energy trend</dt><dd id="energy-spark"></dd></div>
+            <div><dt>Angular drift</dt><dd id="momentum-drift">0.00 ppm</dd></div>
+            <div><dt>Angular trend</dt><dd id="angular-spark"></dd></div>
+            <div><dt>Linear momentum</dt><dd id="linear-momentum">0</dd></div>
+            <div><dt>Angular momentum</dt><dd id="angular-momentum">0</dd></div>
+            <div><dt>Center of mass</dt><dd id="center-mass">0 m</dd></div>
             <div><dt>Steps / frame</dt><dd id="steps-frame">0</dd></div>
+            <div><dt>Status</dt><dd id="diagnostic-status">Stable</dd></div>
           </dl>
         </section>
 
@@ -93,6 +139,16 @@
             <span>Search for or click a body to inspect it.</span>
           </div>
           <button id="stop-follow" type="button" hidden>Stop Following</button>
+        </section>
+
+        <section class="control-section dataset">
+          <div class="section-heading"><span>Dataset</span></div>
+          <dl>
+            <div><dt>Source</dt><dd id="dataset-source"></dd></div>
+            <div><dt>Epoch</dt><dd id="dataset-epoch"></dd></div>
+            <div><dt>Frame</dt><dd id="dataset-frame"></dd></div>
+            <div><dt>Notes</dt><dd id="dataset-notes"></dd></div>
+          </dl>
         </section>
 
         <footer>

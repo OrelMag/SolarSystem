@@ -22,12 +22,22 @@ import {
   type DistanceScaleConfig,
 } from "./distanceScale";
 import { shouldShowMoon } from "./moonVisibility";
+import { resolveViewFrameOrigin, type ViewFrame } from "./viewFrame";
 
-const MAX_TRAIL_POINTS = 900;
 const TRAIL_SAMPLE_SECONDS = 10 * DAY_SECONDS;
 const ORBIT_REFRESH_SECONDS = 30 * DAY_SECONDS;
 const MOON_VISIBILITY_ZOOM = 28;
 const LOCAL_ORBIT_DISPLAY_SCALE = 80;
+
+export type { ViewFrame } from "./viewFrame";
+export type TrailMode = "off" | "selected" | "planets" | "all";
+export type TrailLengthPreset = "short" | "medium" | "long";
+
+const TRAIL_POINT_LIMITS: Readonly<Record<TrailLengthPreset, number>> = {
+  short: 180,
+  medium: 900,
+  long: 2_400,
+};
 
 interface BodyView {
   readonly mesh: THREE.Mesh;
@@ -71,6 +81,10 @@ export class SolarSystemRenderer {
   private cometTailsVisible = true;
   private moonsVisible = true;
   private distanceScale: DistanceScaleConfig = DEFAULT_DISTANCE_SCALE;
+  private viewFrame: ViewFrame = "barycentric";
+  private viewFrameOriginM = { x: 0, y: 0, z: 0 };
+  private trailMode: TrailMode = "all";
+  private trailPointLimit = TRAIL_POINT_LIMITS.medium;
   private selectionHandler: ((id: string) => void) | undefined;
   private followChangeHandler: ((id: string | undefined) => void) | undefined;
   private followBodyId: string | undefined;
@@ -131,21 +145,28 @@ export class SolarSystemRenderer {
   ): void {
     const sun = bodies.find((body) => body.id === "sun");
     if (!sun) return;
+    this.viewFrameOriginM = resolveViewFrameOrigin({
+      frame: this.viewFrame,
+      selectedBodyId: this.selectedBodyId,
+      bodies,
+      orbitalStates,
+    });
     for (const body of bodies) {
       const view = this.bodyViews.get(body.id);
       if (!view) continue;
       const scenePosition = this.toScenePosition(body.positionM);
       view.mesh.position.copy(scenePosition);
       if (
-        this.trailsVisible &&
+        this.shouldShowTrailFor(body.id, body.category) &&
         (view.trailPoints.length === 0 ||
           elapsedSeconds - view.lastTrailSampleSeconds >= TRAIL_SAMPLE_SECONDS)
       ) {
         view.trailPoints.push(scenePosition.clone());
-        if (view.trailPoints.length > MAX_TRAIL_POINTS) view.trailPoints.shift();
+        while (view.trailPoints.length > this.trailPointLimit) view.trailPoints.shift();
         view.trail.geometry.setFromPoints(view.trailPoints);
         view.lastTrailSampleSeconds = elapsedSeconds;
       }
+      view.trail.visible = this.shouldShowTrailFor(body.id, body.category);
     }
 
     for (const orbitalState of orbitalStates) {
@@ -182,7 +203,35 @@ export class SolarSystemRenderer {
 
   setTrailsVisible(visible: boolean): void {
     this.trailsVisible = visible;
-    for (const view of this.bodyViews.values()) view.trail.visible = visible;
+    for (const [id, view] of this.bodyViews) {
+      const category = view.mesh.userData.category;
+      view.trail.visible =
+        typeof category === "string" && this.shouldShowTrailFor(id, category);
+    }
+  }
+
+  setTrailMode(mode: TrailMode, selectedBodyId = this.selectedBodyId): void {
+    this.trailMode = mode;
+    this.selectedBodyId = selectedBodyId;
+    for (const [id, view] of this.bodyViews) {
+      const category = view.mesh.userData.category;
+      view.trail.visible =
+        typeof category === "string" && this.shouldShowTrailFor(id, category);
+    }
+  }
+
+  setTrailLengthPreset(preset: TrailLengthPreset): void {
+    this.trailPointLimit = TRAIL_POINT_LIMITS[preset];
+    for (const view of this.bodyViews.values()) {
+      while (view.trailPoints.length > this.trailPointLimit) view.trailPoints.shift();
+      view.trail.geometry.setFromPoints(view.trailPoints);
+    }
+  }
+
+  setViewFrame(frame: ViewFrame, selectedBodyId = this.selectedBodyId): void {
+    this.viewFrame = frame;
+    this.selectedBodyId = selectedBodyId;
+    this.clearTrails();
   }
 
   setPlanetPathsVisible(visible: boolean): void {
@@ -270,6 +319,11 @@ export class SolarSystemRenderer {
     this.frameAt(6.5 * this.distanceScale.scaleFactor);
   }
 
+  showAll(): void {
+    this.stopFollowing();
+    this.fitSystem();
+  }
+
   clearTrails(): void {
     for (const view of this.bodyViews.values()) {
       view.trailPoints.length = 0;
@@ -284,18 +338,21 @@ export class SolarSystemRenderer {
     this.renderer.domElement.removeEventListener("pointerdown", this.handlePointerDown);
     this.controls.dispose();
     this.controls.removeEventListener("start", this.handleControlsStart);
+    this.renderer.domElement.remove();
     this.renderer.dispose();
     for (const view of this.bodyViews.values()) view.label.remove();
     for (const view of this.orbitalViews.values()) view.label.remove();
+    this.labelsContainer.replaceChildren();
   }
 
   private createBodyViews(bodies: readonly Readonly<MutableBodyState>[]): void {
     for (const body of bodies) {
       const visibleRadius =
         body.category === "star"
-          ? 0.5
+          ? 0.22
           : Math.max(0.11, Math.min(0.38, Math.log10(body.radiusM) * 0.075 - 0.35));
       const mesh = this.createDisc(body.id, visibleRadius, body.visual.color);
+      mesh.userData.category = body.category;
       if (body.id === "sun") this.addSunGlow(mesh, body.visual.emissive ?? body.visual.color);
       if (body.id === "saturn") this.addSaturnRing(mesh, visibleRadius);
       const label = this.createLabel(body.name);
@@ -322,6 +379,7 @@ export class SolarSystemRenderer {
             ? 0.15
             : 0.13;
       const mesh = this.createDisc(body.id, radius, body.visual.color);
+      mesh.userData.category = body.category;
       const label = this.createLabel(body.name);
       const orbit = this.createLine(body.visual.color, body.category === "moon" ? 0.32 : 0.24);
       const tail =
@@ -371,7 +429,7 @@ export class SolarSystemRenderer {
           this.centralMassKg,
         );
         const offset = index * 3;
-        const displayPosition = this.toScenePosition(state.positionM);
+        const displayPosition = this.toSceneOffset(state.positionM);
         belt.positions[offset] = displayPosition.x + sunScenePosition.x;
         belt.positions[offset + 1] = displayPosition.y + sunScenePosition.y;
         belt.positions[offset + 2] = displayPosition.z + sunScenePosition.z;
@@ -497,7 +555,7 @@ export class SolarSystemRenderer {
       new THREE.MeshBasicMaterial({ color, transparent: true }),
     );
     mesh.userData.bodyId = id;
-    mesh.renderOrder = 2;
+    mesh.renderOrder = id === "sun" || id === "validation-primary" ? 1 : 3;
     this.scene.add(mesh);
     return mesh;
   }
@@ -522,10 +580,10 @@ export class SolarSystemRenderer {
 
   private addSunGlow(mesh: THREE.Mesh, color: number): void {
     const glow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.86, 40),
+      new THREE.CircleGeometry(0.42, 40),
       new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.13 }),
     );
-    glow.renderOrder = 1;
+    glow.renderOrder = 0;
     mesh.add(glow);
   }
 
@@ -642,11 +700,34 @@ export class SolarSystemRenderer {
   };
 
   private toScenePosition(positionM: { x: number; y: number; z: number }): THREE.Vector3 {
+    const displayPosition = scaleDistanceForDisplay(
+      {
+        x: positionM.x - this.viewFrameOriginM.x,
+        y: positionM.y - this.viewFrameOriginM.y,
+        z: positionM.z - this.viewFrameOriginM.z,
+      },
+      this.distanceScale,
+    );
+    return new THREE.Vector3(
+      displayPosition.x / ASTRONOMICAL_UNIT_M,
+      displayPosition.y / ASTRONOMICAL_UNIT_M,
+      displayPosition.z / ASTRONOMICAL_UNIT_M,
+    );
+  }
+
+  private toSceneOffset(positionM: { x: number; y: number; z: number }): THREE.Vector3 {
     const displayPosition = scaleDistanceForDisplay(positionM, this.distanceScale);
     return new THREE.Vector3(
       displayPosition.x / ASTRONOMICAL_UNIT_M,
       displayPosition.y / ASTRONOMICAL_UNIT_M,
       displayPosition.z / ASTRONOMICAL_UNIT_M,
     );
+  }
+
+  private shouldShowTrailFor(id: string, category: string): boolean {
+    if (!this.trailsVisible || this.trailMode === "off") return false;
+    if (this.trailMode === "selected") return id === this.selectedBodyId;
+    if (this.trailMode === "planets") return category === "planet";
+    return true;
   }
 }

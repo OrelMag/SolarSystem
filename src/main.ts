@@ -1,34 +1,41 @@
 import "./style.css";
-import { BELT_DEFINITIONS, generateBeltParticles } from "./data/belts";
-import { MASSIVE_BODY_FACTS } from "./data/bodyFacts";
-import { COMETS } from "./data/comets";
-import { EXPLORATION_BODIES } from "./data/satellites";
-import { createSolarSystem } from "./data/solarSystem";
-import type {
-  HierarchicalBodyState,
-  HierarchicalOrbitalBody,
-} from "./domain/orbits";
-import { magnitude, subtract } from "./domain/vector";
+import {
+  DiagnosticsHistory,
+  sparkline,
+} from "./app/diagnosticsHistory";
+import {
+  formatElapsed,
+  formatVector,
+} from "./app/format";
+import {
+  DEFAULT_FIXED_TIMESTEP_SECONDS,
+  DEFAULT_MAX_STEPS_PER_FRAME,
+  DEFAULT_TIME_SCALE_SECONDS,
+  findScenario,
+  SCENARIOS,
+  type ScenarioDefinition,
+} from "./app/scenarios";
+import { buildSelectedBodyDetail } from "./app/selectedBody";
+import type { HierarchicalBodyState, HierarchicalOrbitalBody } from "./domain/orbits";
+import { magnitude } from "./domain/vector";
 import {
   calculateConservedQuantities,
   relativeDrift,
+  type ConservedQuantities,
 } from "./physics/diagnostics";
-import {
-  ASTRONOMICAL_UNIT_M,
-  DAY_SECONDS,
-  GRAVITATIONAL_CONSTANT,
-  J2000_ISO,
-} from "./physics/constants";
+import { DAY_SECONDS, J2000_ISO } from "./physics/constants";
 import {
   propagateHierarchicalBodies,
   validateOrbitalHierarchy,
 } from "./physics/hierarchicalOrbits";
-import {
-  J2000_JULIAN_DAY,
-  stateToOsculatingElements,
-} from "./physics/orbitalMechanics";
+import { calculateAccelerations } from "./physics/gravity";
 import { NBodySimulation } from "./physics/simulation";
-import { SolarSystemRenderer } from "./rendering/SolarSystemRenderer";
+import {
+  SolarSystemRenderer,
+  type TrailLengthPreset,
+  type TrailMode,
+  type ViewFrame,
+} from "./rendering/SolarSystemRenderer";
 import {
   filterNavigatorEntries,
   groupNavigatorEntries,
@@ -36,17 +43,10 @@ import {
   type NavigatorEntry,
 } from "./ui/navigator";
 
-const FIXED_TIMESTEP_SECONDS = 3 * 3_600;
-const MAX_STEPS_PER_FRAME = 80;
-const TIME_SCALES = [
-  { label: "1 hour/s", seconds: 3_600 },
-  { label: "6 hours/s", seconds: 21_600 },
-  { label: "1 day/s", seconds: DAY_SECONDS },
-  { label: "30 days/s", seconds: 30 * DAY_SECONDS },
-  { label: "90 days/s", seconds: 90 * DAY_SECONDS },
-  { label: "180 days/s", seconds: 180 * DAY_SECONDS },
-  { label: "1 year/s", seconds: 365.25 * DAY_SECONDS },
-] as const;
+const MINIMUM_DISTANCE_M = 1_000;
+const DIAGNOSTIC_INTERVAL_SECONDS = 30 * DAY_SECONDS;
+const ENERGY_WARNING_DRIFT = 5e-5;
+const ANGULAR_WARNING_DRIFT = 5e-5;
 
 const GROUP_LABELS: Readonly<Partial<Record<NavigatorCategory, string>>> = {
   star: "Star",
@@ -56,49 +56,91 @@ const GROUP_LABELS: Readonly<Partial<Record<NavigatorCategory, string>>> = {
   comet: "Comets",
 };
 
+const TIME_SCALE_LABELS = new Map<string, string>([
+  ["paused", "Paused"],
+  ["1", "Real time"],
+  ["3600", "1 hour/s"],
+  ["86400", "1 day/s"],
+  ["2592000", "30 days/s"],
+  ["31557600", "1 year/s"],
+]);
+
 function requireElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
   if (!(element instanceof HTMLElement)) throw new Error(`Missing element "#${id}".`);
   return element as T;
 }
 
-const initialBodies = createSolarSystem();
-const initialSun = initialBodies.find((body) => body.id === "sun");
-if (!initialSun) throw new Error("Solar dataset must include the Sun.");
-const orbitalDefinitions: readonly HierarchicalOrbitalBody[] = [
-  ...COMETS,
-  ...EXPLORATION_BODIES,
-];
-validateOrbitalHierarchy(
-  orbitalDefinitions,
-  initialBodies.map((body) => body.id),
-);
+function createSimulation(scenario: ScenarioDefinition): NBodySimulation {
+  const bodies = scenario.createBodies();
+  validateOrbitalHierarchy(
+    scenario.orbitalBodies,
+    bodies.map((body) => body.id),
+  );
+  return new NBodySimulation(bodies, {
+    fixedTimestepSeconds: DEFAULT_FIXED_TIMESTEP_SECONDS,
+    minimumDistanceM: MINIMUM_DISTANCE_M,
+  });
+}
 
-const simulation = new NBodySimulation(initialBodies, {
-  fixedTimestepSeconds: FIXED_TIMESTEP_SECONDS,
-  minimumDistanceM: 1_000,
-});
-const belts = BELT_DEFINITIONS.map((definition) => ({
-  definition,
-  particles: generateBeltParticles(definition),
-}));
-const renderer = new SolarSystemRenderer(
-  requireElement("scene"),
-  requireElement("labels"),
-  simulation.bodies,
-  orbitalDefinitions,
-  belts,
-  initialSun.massKg,
-);
+function calculateOrbitalStates(
+  orbitalDefinitions: readonly HierarchicalOrbitalBody[],
+  simulation: NBodySimulation,
+): HierarchicalBodyState[] {
+  return propagateHierarchicalBodies(
+    orbitalDefinitions,
+    simulation.bodies,
+    2_451_545 + simulation.elapsedSeconds / DAY_SECONDS,
+  );
+}
 
+function formatTimeScale(seconds: number): string {
+  if (seconds === 1) return "Real time";
+  if (seconds < DAY_SECONDS) return `${(seconds / 3_600).toLocaleString()} hours/s`;
+  if (seconds < 365 * DAY_SECONDS) return `${(seconds / DAY_SECONDS).toLocaleString()} days/s`;
+  return `${(seconds / (365.25 * DAY_SECONDS)).toFixed(2)} years/s`;
+}
+
+function createNavigatorEntries(
+  bodies: readonly { readonly id: string; readonly name: string; readonly category: NavigatorCategory }[],
+  orbitalDefinitions: readonly HierarchicalOrbitalBody[],
+  namesById: ReadonlyMap<string, string>,
+): NavigatorEntry[] {
+  return [
+    ...bodies.map((body) => ({
+      id: body.id,
+      name: body.name,
+      category: body.category,
+      parentName: body.id === "sun" ? undefined : "Sun",
+    })),
+    ...orbitalDefinitions.map((body) => ({
+      id: body.id,
+      name: body.name,
+      category: body.category,
+      parentName: namesById.get(body.parentId),
+    })),
+  ];
+}
+
+const sceneElement = requireElement("scene");
+const labelsElement = requireElement("labels");
 const toggleButton = requireElement<HTMLButtonElement>("toggle");
 const resetButton = requireElement<HTMLButtonElement>("reset");
+const scenarioSelect = requireElement<HTMLSelectElement>("scenario");
+const speedSelect = requireElement<HTMLSelectElement>("speed-select");
+const customSpeedInput = requireElement<HTMLInputElement>("custom-speed");
+const speedValue = requireElement<HTMLOutputElement>("speed-value");
 const fitButton = requireElement<HTMLButtonElement>("fit");
 const fitInnerButton = requireElement<HTMLButtonElement>("fit-inner");
+const focusSunButton = requireElement<HTMLButtonElement>("focus-sun");
+const focusSelectedButton = requireElement<HTMLButtonElement>("focus-selected");
+const showAllButton = requireElement<HTMLButtonElement>("show-all");
 const stopFollowButton = requireElement<HTMLButtonElement>("stop-follow");
-const speedInput = requireElement<HTMLInputElement>("speed");
-const speedValue = requireElement<HTMLOutputElement>("speed-value");
+const viewFrameSelect = requireElement<HTMLSelectElement>("view-frame");
 const trailsInput = requireElement<HTMLInputElement>("trails");
+const trailModeSelect = requireElement<HTMLSelectElement>("trail-mode");
+const trailLengthSelect = requireElement<HTMLSelectElement>("trail-length");
+const clearTrailsButton = requireElement<HTMLButtonElement>("clear-trails");
 const planetPathsInput = requireElement<HTMLInputElement>("planet-paths");
 const mainBeltInput = requireElement<HTMLInputElement>("main-belt");
 const kuiperBeltInput = requireElement<HTMLInputElement>("kuiper-belt");
@@ -113,133 +155,124 @@ const searchResults = requireElement("body-results");
 const statusElement = requireElement("status");
 const dateElement = requireElement("date");
 const elapsedElement = requireElement("elapsed");
+const stepElement = requireElement("step");
+const timeScaleElement = requireElement("time-scale");
+const maxStepsElement = requireElement("max-steps");
+const catchupElement = requireElement("catchup");
 const energyDriftElement = requireElement("energy-drift");
+const energySparkElement = requireElement("energy-spark");
 const momentumDriftElement = requireElement("momentum-drift");
+const angularSparkElement = requireElement("angular-spark");
+const linearMomentumElement = requireElement("linear-momentum");
+const angularMomentumElement = requireElement("angular-momentum");
+const centerMassElement = requireElement("center-mass");
+const diagnosticStatusElement = requireElement("diagnostic-status");
 const stepsFrameElement = requireElement("steps-frame");
 const selectedBodyElement = requireElement("selected-body");
+const diagnosticsSection = document.querySelector<HTMLElement>(".diagnostics");
+const datasetSourceElement = requireElement("dataset-source");
+const datasetEpochElement = requireElement("dataset-epoch");
+const datasetFrameElement = requireElement("dataset-frame");
+const datasetNotesElement = requireElement("dataset-notes");
 
-const namesById = new Map<string, string>([
-  ...initialBodies.map((body) => [body.id, body.name] as const),
-  ...orbitalDefinitions.map((body) => [body.id, body.name] as const),
-]);
-const navigatorEntries: readonly NavigatorEntry[] = [
-  ...initialBodies.map((body) => ({
-    id: body.id,
-    name: body.name,
-    category: body.category,
-    parentName: body.id === "sun" ? undefined : "Sun",
-  })),
-  ...orbitalDefinitions.map((body) => ({
-    id: body.id,
-    name: body.name,
-    category: body.category,
-    parentName: namesById.get(body.parentId),
-  })),
-];
+for (const scenario of SCENARIOS) {
+  const option = document.createElement("option");
+  option.value = scenario.id;
+  option.textContent = scenario.label;
+  scenarioSelect.append(option);
+}
 
+let currentScenario = findScenario(scenarioSelect.value || "full-solar-system");
+let simulation = createSimulation(currentScenario);
+let orbitalDefinitions = currentScenario.orbitalBodies;
+let orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+let renderer = createRenderer();
 let running = true;
 let accumulatorSeconds = 0;
 let lastFrameTime = performance.now();
-let timeScale = TIME_SCALES[Number(speedInput.value)] ?? TIME_SCALES[3];
+let timeScaleSeconds = DEFAULT_TIME_SCALE_SECONDS;
 let initialConserved = calculateConservedQuantities(simulation.bodies);
+let latestConserved: ConservedQuantities = initialConserved;
 let lastDiagnosticsElapsed = Number.NEGATIVE_INFINITY;
-let orbitalStates: readonly HierarchicalBodyState[] = calculateOrbitalStates(0);
-let selectedBodyId = "sun";
+let diagnosticsHistory = new DiagnosticsHistory();
+let namesById = buildNamesById();
+let navigatorEntries = createNavigatorEntries(simulation.bodies, orbitalDefinitions, namesById);
+let selectedBodyId = currentScenario.defaultTargetId;
 let filteredNavigatorEntries: NavigatorEntry[] = [];
 let activeNavigatorIndex = 0;
 
-function calculateOrbitalStates(elapsedSeconds: number): HierarchicalBodyState[] {
-  return propagateHierarchicalBodies(
-    orbitalDefinitions,
+function createRenderer(): SolarSystemRenderer {
+  const sun = simulation.bodies.find((body) => body.id === "sun") ?? simulation.bodies[0];
+  if (!sun) throw new Error("Scenario must include at least one massive body.");
+  const instance = new SolarSystemRenderer(
+    sceneElement,
+    labelsElement,
     simulation.bodies,
-    J2000_JULIAN_DAY + elapsedSeconds / DAY_SECONDS,
+    orbitalDefinitions,
+    currentScenario.belts,
+    sun.massKg,
   );
+  instance.onBodySelected(selectAndFollow);
+  instance.onFollowChanged((id) => {
+    stopFollowButton.hidden = id === undefined;
+    stopFollowButton.textContent = id ? `Stop Following ${namesById.get(id) ?? ""}` : "Stop Following";
+  });
+  return instance;
 }
 
-function parentMassKg(parentId: string): number {
-  return (
-    simulation.bodies.find((body) => body.id === parentId)?.massKg ??
-    orbitalDefinitions.find((body) => body.id === parentId)?.massKg ??
-    0
+function buildNamesById(): Map<string, string> {
+  return new Map<string, string>([
+    ...simulation.bodies.map((body) => [body.id, body.name] as const),
+    ...orbitalDefinitions.map((body) => [body.id, body.name] as const),
+  ]);
+}
+
+function updateRunningUi(): void {
+  toggleButton.textContent = running ? "Pause" : "Resume";
+  statusElement.textContent = running ? "Running" : "Paused";
+  statusElement.classList.toggle("paused", !running);
+}
+
+function renderSelectedBody(): void {
+  const accelerations = calculateAccelerations(simulation.bodies, MINIMUM_DISTANCE_M);
+  const accelerationsById = new Map(
+    simulation.bodies.map((body, index) => [body.id, accelerations[index] ?? { x: 0, y: 0, z: 0 }] as const),
   );
-}
-
-function formatPeriod(seconds: number): string {
-  const days = seconds / DAY_SECONDS;
-  return days >= 730 ? `${(days / 365.25).toFixed(2)} years` : `${days.toFixed(2)} days`;
-}
-
-function updateSelectedBody(id: string): void {
-  selectedBodyId = id;
-  const body = simulation.bodies.find((candidate) => candidate.id === id);
-  if (body) {
-    const facts = MASSIVE_BODY_FACTS[id];
-    const sun = simulation.bodies.find((candidate) => candidate.id === "sun");
-    let orbitalText = "System center";
-    if (body.id !== "sun" && sun) {
-      const elements = stateToOsculatingElements(
-        subtract(body.positionM, sun.positionM),
-        subtract(body.velocityMps, sun.velocityMps),
-        sun.massKg + body.massKg,
-        J2000_JULIAN_DAY,
-      );
-      const period = 2 * Math.PI * Math.sqrt(
-        elements.semiMajorAxisM ** 3 /
-          (GRAVITATIONAL_CONSTANT * (sun.massKg + body.massKg)),
-      );
-      orbitalText = `Sun distance: ${(magnitude(subtract(body.positionM, sun.positionM)) / ASTRONOMICAL_UNIT_M).toFixed(3)} AU<br>Orbital period: ${formatPeriod(period)}`;
-    }
-    selectedBodyElement.innerHTML = `
-      <strong>${body.name}</strong>
-      <span>
-        ${body.category}<br>
-        Parent: ${body.id === "sun" ? "None" : "Sun"}<br>
-        Radius: ${(body.radiusM / 1_000).toLocaleString(undefined, { maximumFractionDigits: 0 })} km<br>
-        Surface gravity: ${facts?.surfaceGravityMps2?.toFixed(3) ?? "Unknown"} m/s²<br>
-        ${orbitalText}<br>
-        Live speed: ${(magnitude(body.velocityMps) / 1_000).toFixed(2)} km/s<br>
-        Discovery: ${facts?.discovery ?? "Unknown"}<br><br>
-        ${facts?.significance ?? ""}
-      </span>
-    `;
-    return;
+  const detail = buildSelectedBodyDetail({
+    id: selectedBodyId,
+    massiveBodies: simulation.bodies,
+    orbitalStates,
+    namesById,
+    accelerationsById,
+  });
+  if (!detail) return;
+  selectedBodyElement.replaceChildren();
+  const title = document.createElement("strong");
+  title.textContent = detail.title;
+  const list = document.createElement("dl");
+  list.className = "detail-grid";
+  for (const row of detail.rows) {
+    const item = document.createElement("div");
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = row.label;
+    description.textContent = row.value;
+    item.append(term, description);
+    list.append(item);
   }
-
-  const state = orbitalStates.find((candidate) => candidate.body.id === id);
-  if (!state) return;
-  const definition = state.body;
-  const period = 2 * Math.PI * Math.sqrt(
-    definition.elements.semiMajorAxisM ** 3 /
-      (GRAVITATIONAL_CONSTANT * (parentMassKg(definition.parentId) + definition.massKg)),
-  );
-  const gravity =
-    definition.facts.surfaceGravityMps2 ??
-    (GRAVITATIONAL_CONSTANT * definition.massKg) / definition.radiusM ** 2;
-  const distance = magnitude(state.relativePositionM);
-  const distanceText =
-    definition.category === "moon"
-      ? `${(distance / 1_000).toLocaleString(undefined, { maximumFractionDigits: 0 })} km`
-      : `${(distance / ASTRONOMICAL_UNIT_M).toFixed(3)} AU`;
-  selectedBodyElement.innerHTML = `
-    <strong>${definition.name}</strong>
-    <span>
-      ${definition.category} | massless simulation body<br>
-      Parent: ${namesById.get(definition.parentId) ?? definition.parentId}<br>
-      Radius: ${(definition.radiusM / 1_000).toLocaleString(undefined, { maximumFractionDigits: 1 })} km<br>
-      Surface gravity: ${gravity.toFixed(4)} m/s²<br>
-      Parent distance: ${distanceText}<br>
-      Orbital period: ${formatPeriod(period)}<br>
-      Live relative speed: ${(magnitude(state.relativeVelocityMps) / 1_000).toFixed(2)} km/s<br>
-      Discovery: ${definition.facts.discovery}<br><br>
-      ${definition.facts.significance}
-    </span>
-  `;
+  const note = document.createElement("p");
+  note.className = "detail-note";
+  note.textContent = detail.note;
+  selectedBodyElement.append(title, list, note);
 }
 
 function selectAndFollow(id: string): void {
+  selectedBodyId = id;
   renderer.selectBody(id);
   renderer.focusBody(id, true);
-  updateSelectedBody(id);
+  renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
+  renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
+  renderSelectedBody();
   renderNavigator();
 }
 
@@ -274,60 +307,153 @@ function renderNavigator(): void {
       resultIndex += 1;
     }
   }
-  searchInput.setAttribute(
-    "aria-expanded",
-    String(filteredNavigatorEntries.length > 0),
-  );
+  searchInput.setAttribute("aria-expanded", String(filteredNavigatorEntries.length > 0));
   searchResults.querySelector<HTMLElement>(".navigator-result.active")?.scrollIntoView({
     block: "nearest",
   });
 }
 
-function updateRunningUi(): void {
-  toggleButton.textContent = running ? "Pause" : "Resume";
-  statusElement.textContent = running ? "Running" : "Paused";
-  statusElement.classList.toggle("paused", !running);
+function updateDatasetPanel(): void {
+  datasetSourceElement.textContent = currentScenario.metadata.source;
+  datasetEpochElement.textContent = currentScenario.metadata.epoch;
+  datasetFrameElement.textContent = currentScenario.metadata.referenceFrame;
+  datasetNotesElement.textContent = `${currentScenario.description} ${currentScenario.metadata.notes}`;
 }
 
-function reset(): void {
+function resetDiagnostics(): void {
+  initialConserved = calculateConservedQuantities(simulation.bodies);
+  latestConserved = initialConserved;
+  lastDiagnosticsElapsed = Number.NEGATIVE_INFINITY;
+  diagnosticsHistory.reset();
+}
+
+function resetCurrentScenario(): void {
   simulation.reset();
   accumulatorSeconds = 0;
-  orbitalStates = calculateOrbitalStates(0);
-  initialConserved = calculateConservedQuantities(simulation.bodies);
-  lastDiagnosticsElapsed = Number.NEGATIVE_INFINITY;
+  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+  resetDiagnostics();
+  selectedBodyId = currentScenario.defaultTargetId;
   renderer.clearTrails();
   renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
-  renderer.selectBody("sun");
+  renderer.selectBody(selectedBodyId);
   renderer.stopFollowing();
-  updateSelectedBody("sun");
+  renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
+  renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
+  renderSelectedBody();
   renderNavigator();
 }
 
-function updateTelemetry(stepsThisFrame: number): void {
+function switchScenario(id: string): void {
+  currentScenario = findScenario(id);
+  orbitalDefinitions = currentScenario.orbitalBodies;
+  simulation = createSimulation(currentScenario);
+  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+  namesById = buildNamesById();
+  navigatorEntries = createNavigatorEntries(simulation.bodies, orbitalDefinitions, namesById);
+  selectedBodyId = currentScenario.defaultTargetId;
+  accumulatorSeconds = 0;
+  activeNavigatorIndex = 0;
+  searchInput.value = "";
+  renderer.dispose();
+  renderer = createRenderer();
+  renderer.setDistanceScale(Number(distanceScaleInput.value));
+  renderer.setTrailsVisible(trailsInput.checked);
+  renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
+  renderer.setTrailLengthPreset(trailLengthSelect.value as TrailLengthPreset);
+  renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
+  renderer.setPlanetPathsVisible(planetPathsInput.checked);
+  renderer.setBeltVisible("main-belt", mainBeltInput.checked);
+  renderer.setBeltVisible("kuiper-belt", kuiperBeltInput.checked);
+  renderer.setCometPathsVisible(cometPathsInput.checked);
+  renderer.setCometTailsVisible(cometTailsInput.checked);
+  renderer.setMoonsVisible(moonsInput.checked);
+  renderer.setLabelsVisible(labelsInput.checked);
+  resetDiagnostics();
+  updateDatasetPanel();
+  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
+  renderer.selectBody(selectedBodyId);
+  renderer.focusBody(selectedBodyId, false);
+  renderSelectedBody();
+  renderNavigator();
+}
+
+function updateSpeedFromControls(): void {
+  customSpeedInput.hidden = speedSelect.value !== "custom";
+  if (speedSelect.value === "paused") {
+    running = false;
+    timeScaleSeconds = 0;
+  } else if (speedSelect.value === "custom") {
+    timeScaleSeconds = Math.max(1, Number(customSpeedInput.value) || DEFAULT_TIME_SCALE_SECONDS);
+    running = true;
+  } else {
+    timeScaleSeconds = Number(speedSelect.value);
+    running = true;
+  }
+  speedValue.value = timeScaleSeconds === 0 ? "Paused" : formatTimeScale(timeScaleSeconds);
+  updateRunningUi();
+}
+
+function updateTelemetry(stepsThisFrame: number, clamped: boolean): void {
   const elapsed = simulation.elapsedSeconds;
   const currentDate = new Date(new Date(J2000_ISO).getTime() + elapsed * 1_000);
   dateElement.textContent = currentDate.toISOString().slice(0, 10);
-  elapsedElement.textContent = `${(elapsed / DAY_SECONDS).toFixed(2)} days`;
+  elapsedElement.textContent = formatElapsed(elapsed);
+  stepElement.textContent = `${DEFAULT_FIXED_TIMESTEP_SECONDS / 3_600} hours`;
+  timeScaleElement.textContent = speedValue.value;
+  maxStepsElement.textContent = String(DEFAULT_MAX_STEPS_PER_FRAME);
+  catchupElement.textContent = clamped ? "Clamped" : "Idle";
   stepsFrameElement.textContent = String(stepsThisFrame);
-  if (elapsed - lastDiagnosticsElapsed >= 30 * DAY_SECONDS || elapsed === 0) {
-    const current = calculateConservedQuantities(simulation.bodies);
-    energyDriftElement.textContent =
-      `${(relativeDrift(current.energyJ, initialConserved.energyJ) * 1e6).toFixed(3)} ppm`;
-    momentumDriftElement.textContent = `${(
-      relativeDrift(
-        magnitude(current.angularMomentumKgM2ps),
+
+  if (elapsed - lastDiagnosticsElapsed >= DIAGNOSTIC_INTERVAL_SECONDS || elapsed === 0) {
+    latestConserved = calculateConservedQuantities(simulation.bodies);
+    diagnosticsHistory.add({
+      elapsedSeconds: elapsed,
+      energyDrift: relativeDrift(latestConserved.energyJ, initialConserved.energyJ),
+      angularMomentumDrift: relativeDrift(
+        magnitude(latestConserved.angularMomentumKgM2ps),
         magnitude(initialConserved.angularMomentumKgM2ps),
-      ) * 1e6
-    ).toFixed(3)} ppm`;
+      ),
+    });
     lastDiagnosticsElapsed = elapsed;
   }
+
+  const status = diagnosticsHistory.status({
+    bodies: simulation.bodies,
+    current: latestConserved,
+    energyWarningDrift: ENERGY_WARNING_DRIFT,
+    angularMomentumWarningDrift: ANGULAR_WARNING_DRIFT,
+  });
+  const latest = status.samples.at(-1);
+  energyDriftElement.textContent = `${(((latest?.energyDrift ?? 0) * 1e6)).toFixed(3)} ppm`;
+  momentumDriftElement.textContent = `${(((latest?.angularMomentumDrift ?? 0) * 1e6)).toFixed(3)} ppm`;
+  energySparkElement.textContent = sparkline(status.samples, "energyDrift");
+  angularSparkElement.textContent = sparkline(status.samples, "angularMomentumDrift");
+  linearMomentumElement.textContent = status.linearMomentumMagnitude.toExponential(3);
+  angularMomentumElement.textContent = status.angularMomentumMagnitude.toExponential(3);
+  centerMassElement.textContent = formatVector(status.centerOfMassM, "m");
+  diagnosticStatusElement.textContent = status.warning ? "Drift warning" : "Stable";
+  diagnosticStatusElement.classList.toggle("warning", status.warning);
+  diagnosticsSection?.classList.toggle("warning", status.warning);
 }
 
 toggleButton.addEventListener("click", () => {
   running = !running;
+  if (running && speedSelect.value === "paused") {
+    speedSelect.value = String(DEFAULT_TIME_SCALE_SECONDS);
+    updateSpeedFromControls();
+    return;
+  }
+  if (!running) {
+    speedSelect.value = "paused";
+    updateSpeedFromControls();
+    return;
+  }
   updateRunningUi();
 });
-resetButton.addEventListener("click", reset);
+resetButton.addEventListener("click", resetCurrentScenario);
+scenarioSelect.addEventListener("change", () => switchScenario(scenarioSelect.value));
+speedSelect.addEventListener("change", updateSpeedFromControls);
+customSpeedInput.addEventListener("input", updateSpeedFromControls);
 fitButton.addEventListener("click", () => {
   renderer.stopFollowing();
   renderer.fitSystem();
@@ -336,12 +462,21 @@ fitInnerButton.addEventListener("click", () => {
   renderer.stopFollowing();
   renderer.fitInnerSystem();
 });
+focusSunButton.addEventListener("click", () => selectAndFollow("sun"));
+focusSelectedButton.addEventListener("click", () => renderer.focusBody(selectedBodyId, true));
+showAllButton.addEventListener("click", () => renderer.showAll());
 stopFollowButton.addEventListener("click", () => renderer.stopFollowing());
-speedInput.addEventListener("input", () => {
-  timeScale = TIME_SCALES[Number(speedInput.value)] ?? TIME_SCALES[3];
-  speedValue.value = timeScale.label;
+viewFrameSelect.addEventListener("change", () => {
+  renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
 });
 trailsInput.addEventListener("change", () => renderer.setTrailsVisible(trailsInput.checked));
+trailModeSelect.addEventListener("change", () => {
+  renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
+});
+trailLengthSelect.addEventListener("change", () => {
+  renderer.setTrailLengthPreset(trailLengthSelect.value as TrailLengthPreset);
+});
+clearTrailsButton.addEventListener("click", () => renderer.clearTrails());
 planetPathsInput.addEventListener("change", () =>
   renderer.setPlanetPathsVisible(planetPathsInput.checked),
 );
@@ -391,41 +526,43 @@ searchInput.addEventListener("keydown", (event) => {
     searchInput.blur();
   }
 });
-renderer.onBodySelected(selectAndFollow);
-renderer.onFollowChanged((id) => {
-  stopFollowButton.hidden = id === undefined;
-  stopFollowButton.textContent = id ? `Stop Following ${namesById.get(id) ?? ""}` : "Stop Following";
-});
 
 function frame(now: number): void {
   const realDeltaSeconds = Math.min((now - lastFrameTime) / 1_000, 0.1);
   lastFrameTime = now;
   let stepsThisFrame = 0;
-  if (running) {
-    accumulatorSeconds += realDeltaSeconds * timeScale.seconds;
+  let clamped = false;
+  if (running && timeScaleSeconds > 0) {
+    accumulatorSeconds += realDeltaSeconds * timeScaleSeconds;
     while (
       accumulatorSeconds >= simulation.fixedTimestepSeconds &&
-      stepsThisFrame < MAX_STEPS_PER_FRAME
+      stepsThisFrame < DEFAULT_MAX_STEPS_PER_FRAME
     ) {
       simulation.step();
       accumulatorSeconds -= simulation.fixedTimestepSeconds;
       stepsThisFrame += 1;
     }
-    if (stepsThisFrame === MAX_STEPS_PER_FRAME) {
+    if (stepsThisFrame === DEFAULT_MAX_STEPS_PER_FRAME) {
       accumulatorSeconds = Math.min(accumulatorSeconds, simulation.fixedTimestepSeconds);
+      clamped = true;
     }
   }
-  orbitalStates = calculateOrbitalStates(simulation.elapsedSeconds);
+  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
   renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
   renderer.render();
-  updateTelemetry(stepsThisFrame);
-  if (selectedBodyId !== "sun") updateSelectedBody(selectedBodyId);
+  updateTelemetry(stepsThisFrame, clamped);
+  renderSelectedBody();
   requestAnimationFrame(frame);
 }
 
-renderer.selectBody("sun");
-renderer.update(simulation.bodies, orbitalStates, 0);
-updateSelectedBody("sun");
+scenarioSelect.value = currentScenario.id;
+speedSelect.value = String(DEFAULT_TIME_SCALE_SECONDS);
+speedValue.value = TIME_SCALE_LABELS.get(speedSelect.value) ?? formatTimeScale(timeScaleSeconds);
+updateDatasetPanel();
 updateRunningUi();
+renderer.selectBody(selectedBodyId);
+renderer.focusBody(selectedBodyId, false);
+renderer.update(simulation.bodies, orbitalStates, 0);
+renderSelectedBody();
 renderNavigator();
 requestAnimationFrame(frame);
