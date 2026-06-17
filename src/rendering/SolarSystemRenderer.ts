@@ -27,9 +27,12 @@ import { resolveViewFrameOrigin, type ViewFrame } from "./viewFrame";
 import {
   calculateMarkerSizing,
   calculatePhysicalMarkerRadius,
+  shouldUsePlanetDotMarkers,
   type MarkerCategory,
+  type MarkerOverlapItem,
   type MarkerScaleMode,
 } from "./markerSizing";
+import { calculateDeclutterVisibility, type DeclutterItem } from "./declutter";
 
 const TRAIL_SAMPLE_SECONDS = 10 * DAY_SECONDS;
 const ORBIT_REFRESH_SECONDS = 30 * DAY_SECONDS;
@@ -199,7 +202,8 @@ export class SolarSystemRenderer {
         view.trail.geometry.setFromPoints(view.trailPoints);
         view.lastTrailSampleSeconds = elapsedSeconds;
       }
-      view.trail.visible = view.mesh.visible && this.shouldShowTrailFor(body.id, body.category);
+      view.trail.visible =
+        this.isBaseVisible(view.mesh) && this.shouldShowTrailFor(body.id, body.category);
     }
 
     for (const orbitalState of orbitalStates) {
@@ -231,6 +235,7 @@ export class SolarSystemRenderer {
   render(): void {
     this.controls.update();
     this.updateMarkerSizes();
+    this.updateDeclutterVisibility();
     this.renderer.render(this.scene, this.camera);
     this.updateLabels();
   }
@@ -240,7 +245,9 @@ export class SolarSystemRenderer {
     for (const [id, view] of this.bodyViews) {
       const category = view.mesh.userData.category;
       view.trail.visible =
-        typeof category === "string" && this.shouldShowTrailFor(id, category);
+        this.isBaseVisible(view.mesh) &&
+        typeof category === "string" &&
+        this.shouldShowTrailFor(id, category);
     }
   }
 
@@ -250,7 +257,9 @@ export class SolarSystemRenderer {
     for (const [id, view] of this.bodyViews) {
       const category = view.mesh.userData.category;
       view.trail.visible =
-        typeof category === "string" && this.shouldShowTrailFor(id, category);
+        this.isBaseVisible(view.mesh) &&
+        typeof category === "string" &&
+        this.shouldShowTrailFor(id, category);
     }
   }
 
@@ -311,7 +320,10 @@ export class SolarSystemRenderer {
     this.cometsVisible = visible;
     for (const view of this.orbitalViews.values()) {
       if (view.body.category !== "comet") continue;
-      view.mesh.visible = shouldShowCometVisual({ kind: "body", cometsVisible: visible });
+      this.setBaseVisible(
+        view.mesh,
+        shouldShowCometVisual({ kind: "body", cometsVisible: visible }),
+      );
       view.orbit.visible = shouldShowCometVisual({
         kind: "path",
         cometsVisible: visible,
@@ -698,7 +710,7 @@ export class SolarSystemRenderer {
         selectedBodyId: this.selectedBodyId,
         selectedParentId,
       });
-      view.mesh.visible = visible;
+      this.setBaseVisible(view.mesh, visible);
       view.orbit.visible = visible;
       view.trail.visible = visible && this.shouldShowTrailFor(id, "moon");
       if (!visible) view.label.style.display = "none";
@@ -715,7 +727,7 @@ export class SolarSystemRenderer {
         selectedBodyId: this.selectedBodyId,
         selectedParentId,
       });
-      view.mesh.visible = visible;
+      this.setBaseVisible(view.mesh, visible);
       view.orbit.visible = visible;
       if (!visible) view.label.style.display = "none";
     }
@@ -741,14 +753,28 @@ export class SolarSystemRenderer {
         category: view.category,
         physicalRadiusM: view.physicalRadiusM,
         baseWorldRadius: view.baseWorldRadius,
-      }, viewportHeightPx, cameraWorldHeight);
+      }, viewportHeightPx, cameraWorldHeight, false);
     }
     for (const [id, view] of this.orbitalViews) {
       this.applyMarkerSize(id, view.mesh, {
         category: view.body.category,
         physicalRadiusM: view.body.radiusM,
         baseWorldRadius: view.baseWorldRadius,
-      }, viewportHeightPx, cameraWorldHeight);
+      }, viewportHeightPx, cameraWorldHeight, false);
+    }
+
+    if (
+      this.markerScaleMode === "readable" &&
+      shouldUsePlanetDotMarkers(this.collectMarkerOverlapItems())
+    ) {
+      for (const [id, view] of this.bodyViews) {
+        if (view.category !== "star" && view.category !== "planet") continue;
+        this.applyMarkerSize(id, view.mesh, {
+          category: view.category,
+          physicalRadiusM: view.physicalRadiusM,
+          baseWorldRadius: view.baseWorldRadius,
+        }, viewportHeightPx, cameraWorldHeight, true);
+      }
     }
   }
 
@@ -762,6 +788,7 @@ export class SolarSystemRenderer {
     },
     viewportHeightPx: number,
     cameraWorldHeight: number,
+    compactPrimaryMarkers: boolean,
   ): void {
     const sizing = calculateMarkerSizing({
       mode: this.markerScaleMode,
@@ -774,10 +801,165 @@ export class SolarSystemRenderer {
       cameraWorldHeight,
       manualScaleEnabled: this.manualBodyScaleEnabled,
       manualScale: this.bodyScaleOverrides.get(id),
+      compactPrimaryMarkers,
     });
     const scale = sizing.worldRadius / body.baseWorldRadius;
     mesh.scale.setScalar(Number.isFinite(scale) && scale > 0 ? scale : 1);
     mesh.userData.renderRadiusPx = sizing.pixelRadius;
+  }
+
+  private collectMarkerOverlapItems(): MarkerOverlapItem[] {
+    const width = Math.max(this.container.clientWidth, 1);
+    const height = Math.max(this.container.clientHeight, 1);
+    const items: MarkerOverlapItem[] = [];
+
+    for (const view of this.bodyViews.values()) {
+      if (view.category !== "star" && view.category !== "planet") continue;
+      items.push(this.createMarkerOverlapItem(view.mesh, view.category, width, height));
+    }
+
+    return items;
+  }
+
+  private createMarkerOverlapItem(
+    mesh: THREE.Mesh,
+    category: MarkerCategory,
+    width: number,
+    height: number,
+  ): MarkerOverlapItem {
+    const screen = mesh.position.clone().project(this.camera);
+    return {
+      category,
+      screenXPx: (screen.x * 0.5 + 0.5) * width,
+      screenYPx: (-screen.y * 0.5 + 0.5) * height,
+      pixelRadius:
+        typeof mesh.userData.renderRadiusPx === "number" ? mesh.userData.renderRadiusPx : 0,
+      baseVisible: this.isBaseVisible(mesh),
+    };
+  }
+
+  private updateDeclutterVisibility(): void {
+    const entries = this.collectDeclutterItems();
+    if (this.markerScaleMode !== "readable") {
+      for (const entry of entries) {
+        this.setDeclutterHidden(entry.mesh, false);
+        this.setLabelDeclutterHidden(entry.mesh, false);
+      }
+      return;
+    }
+
+    const result = calculateDeclutterVisibility(
+      entries.map((entry) => entry.item),
+      {
+        viewportWidthPx: Math.max(this.container.clientWidth, 1),
+        viewportHeightPx: Math.max(this.container.clientHeight, 1),
+      },
+    );
+    for (const entry of entries) {
+      this.setDeclutterHidden(
+        entry.mesh,
+        this.isBaseVisible(entry.mesh) && !result.visibleIds.has(entry.item.id),
+      );
+      this.setLabelDeclutterHidden(
+        entry.mesh,
+        this.isBaseVisible(entry.mesh) && !result.labelVisibleIds.has(entry.item.id),
+      );
+    }
+  }
+
+  private collectDeclutterItems(): { readonly item: DeclutterItem; readonly mesh: THREE.Mesh }[] {
+    const width = Math.max(this.container.clientWidth, 1);
+    const height = Math.max(this.container.clientHeight, 1);
+    const entries: { readonly item: DeclutterItem; readonly mesh: THREE.Mesh }[] = [];
+
+    for (const [id, view] of this.bodyViews) {
+      entries.push({
+        item: this.createDeclutterItem({
+          id,
+          mesh: view.mesh,
+          label: view.label,
+          category: view.category,
+          width,
+          height,
+        }),
+        mesh: view.mesh,
+      });
+    }
+    for (const [id, view] of this.orbitalViews) {
+      entries.push({
+        item: this.createDeclutterItem({
+          id,
+          mesh: view.mesh,
+          label: view.label,
+          category: view.body.category,
+          width,
+          height,
+        }),
+        mesh: view.mesh,
+      });
+    }
+
+    return entries;
+  }
+
+  private createDeclutterItem(input: {
+    readonly id: string;
+    readonly mesh: THREE.Mesh;
+    readonly label: HTMLDivElement;
+    readonly category: MarkerCategory;
+    readonly width: number;
+    readonly height: number;
+  }): DeclutterItem {
+    const screen = input.mesh.position.clone().project(this.camera);
+    const markerRadiusPx =
+      typeof input.mesh.userData.renderRadiusPx === "number"
+        ? input.mesh.userData.renderRadiusPx
+        : 0;
+    const labelSize = this.estimateLabelSize(input.label);
+    return {
+      id: input.id,
+      category: input.category,
+      screenXPx: (screen.x * 0.5 + 0.5) * input.width,
+      screenYPx: (-screen.y * 0.5 + 0.5) * input.height,
+      markerRadiusPx,
+      selected: input.id === this.selectedBodyId,
+      baseVisible: this.isBaseVisible(input.mesh),
+      labelWidthPx: labelSize.width,
+      labelHeightPx: labelSize.height,
+    };
+  }
+
+  private estimateLabelSize(
+    label: HTMLDivElement,
+  ): { readonly width: number; readonly height: number } {
+    if (!this.labelsVisible) return { width: 0, height: 0 };
+    const fallbackWidth = (label.textContent?.length ?? 0) * 6;
+    return {
+      width: Math.max(label.offsetWidth, fallbackWidth),
+      height: Math.max(label.offsetHeight, 12),
+    };
+  }
+
+  private setBaseVisible(mesh: THREE.Mesh, visible: boolean): void {
+    mesh.userData.baseVisible = visible;
+    this.applyEffectiveVisibility(mesh);
+  }
+
+  private setDeclutterHidden(mesh: THREE.Mesh, hidden: boolean): void {
+    mesh.userData.hiddenByDeclutter = hidden;
+    this.applyEffectiveVisibility(mesh);
+  }
+
+  private setLabelDeclutterHidden(mesh: THREE.Mesh, hidden: boolean): void {
+    mesh.userData.labelHiddenByDeclutter = hidden;
+  }
+
+  private isBaseVisible(mesh: THREE.Mesh): boolean {
+    return mesh.userData.baseVisible !== false;
+  }
+
+  private applyEffectiveVisibility(mesh: THREE.Mesh): void {
+    mesh.visible = this.isBaseVisible(mesh) && mesh.userData.hiddenByDeclutter !== true;
   }
 
   private createDisc(id: string, radius: number, color: number): THREE.Mesh {
@@ -786,6 +968,9 @@ export class SolarSystemRenderer {
       new THREE.MeshBasicMaterial({ color, transparent: true }),
     );
     mesh.userData.bodyId = id;
+    mesh.userData.baseVisible = true;
+    mesh.userData.hiddenByDeclutter = false;
+    mesh.userData.labelHiddenByDeclutter = false;
     mesh.renderOrder = id === "sun" || id === "validation-primary" ? 1 : 3;
     this.scene.add(mesh);
     return mesh;
@@ -930,7 +1115,7 @@ export class SolarSystemRenderer {
       ...[...this.orbitalViews.values()].map((view) => ({ mesh: view.mesh, label: view.label })),
     ];
     for (const view of entries) {
-      if (!view.mesh.visible) {
+      if (!view.mesh.visible || view.mesh.userData.labelHiddenByDeclutter === true) {
         view.label.style.display = "none";
         continue;
       }

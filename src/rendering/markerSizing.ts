@@ -15,6 +15,7 @@ export interface MarkerSizingInput {
   readonly cameraWorldHeight: number;
   readonly manualScaleEnabled: boolean;
   readonly manualScale: number | undefined;
+  readonly compactPrimaryMarkers?: boolean;
 }
 
 export interface MarkerSizingResult {
@@ -22,8 +23,22 @@ export interface MarkerSizingResult {
   readonly pixelRadius: number;
 }
 
+export interface MarkerOverlapItem {
+  readonly category: MarkerCategory;
+  readonly screenXPx: number;
+  readonly screenYPx: number;
+  readonly pixelRadius: number;
+  readonly baseVisible: boolean;
+}
+
 export const MIN_BODY_SCALE = 0.25;
 export const MAX_BODY_SCALE = 4;
+const PLANET_DOT_RADIUS_PX = 5;
+const SELECTED_PLANET_DOT_RADIUS_PX = 7;
+const SUN_COMPACT_RADIUS_PX = 9;
+const SELECTED_SUN_COMPACT_RADIUS_PX = 11;
+const MAX_DOT_MANUAL_SCALE = 1.25;
+const PLANET_OVERLAP_PADDING_PX = 4;
 
 const READABLE_RADIUS_PX: Readonly<Record<MarkerCategory, number>> = {
   star: 22,
@@ -64,9 +79,57 @@ export function calculateMarkerSizing(input: MarkerSizingInput): MarkerSizingRes
 
   const basePixelRadius = READABLE_RADIUS_PX[input.category] ?? 10;
   const selectedBoost = input.selected ? 3 : 0;
-  const pixelRadius = (basePixelRadius + selectedBoost) * manualScale;
+  const pixelRadius =
+    input.compactPrimaryMarkers &&
+    (input.category === "star" || input.category === "planet")
+      ? calculatePrimaryDotRadius(input.category, input.selected, manualScale)
+      : (basePixelRadius + selectedBoost) * manualScale;
   return {
     worldRadius: pixelRadius * worldUnitsPerPixel,
     pixelRadius,
   };
+}
+
+export function shouldUsePlanetDotMarkers(
+  items: readonly MarkerOverlapItem[],
+  paddingPx = PLANET_OVERLAP_PADDING_PX,
+): boolean {
+  const visiblePrimaryItems = items.filter(
+    (item) =>
+      item.baseVisible &&
+      (item.category === "star" || item.category === "planet") &&
+      Number.isFinite(item.screenXPx) &&
+      Number.isFinite(item.screenYPx),
+  );
+
+  for (let index = 0; index < visiblePrimaryItems.length; index += 1) {
+    const item = visiblePrimaryItems[index];
+    if (!item) continue;
+    for (let otherIndex = index + 1; otherIndex < visiblePrimaryItems.length; otherIndex += 1) {
+      const other = visiblePrimaryItems[otherIndex];
+      if (!other || (item.category !== "planet" && other.category !== "planet")) continue;
+      const distance = Math.hypot(item.screenXPx - other.screenXPx, item.screenYPx - other.screenYPx);
+      const overlapDistance =
+        Math.max(0, item.pixelRadius) + Math.max(0, other.pixelRadius) + Math.max(0, paddingPx);
+      if (distance < overlapDistance) return true;
+    }
+  }
+
+  return false;
+}
+
+function calculatePrimaryDotRadius(
+  category: MarkerCategory,
+  selected: boolean,
+  manualScale: number,
+): number {
+  const baseRadius =
+    category === "star"
+      ? selected
+        ? SELECTED_SUN_COMPACT_RADIUS_PX
+        : SUN_COMPACT_RADIUS_PX
+      : selected
+        ? SELECTED_PLANET_DOT_RADIUS_PX
+        : PLANET_DOT_RADIUS_PX;
+  return baseRadius * Math.min(manualScale, MAX_DOT_MANUAL_SCALE);
 }
