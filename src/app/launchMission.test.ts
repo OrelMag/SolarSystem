@@ -111,7 +111,11 @@ describe("launch mission helpers", () => {
       targetDistanceAtLaunchM: 100_000_001,
       injectionSpeedMps: 10,
     };
-    const mission = createLaunchMissionState({ launch, elapsedSeconds: 0 });
+    const mission = createLaunchMissionState({
+      launch,
+      target: { radiusM: 1 },
+      elapsedSeconds: 0,
+    });
     const closer = updateLaunchMissionState({
       mission,
       bodies: [
@@ -133,6 +137,7 @@ describe("launch mission helpers", () => {
 
     expect(closer.currentDistanceM).toBe(30_000_000);
     expect(closer.closestApproachM).toBe(30_000_000);
+    expect(closer.guidanceMode).toBe("guided");
     expect(farther.closestApproachM).toBe(30_000_000);
     expect(farther.status).toBe("missed");
   });

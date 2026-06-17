@@ -3,10 +3,15 @@ import { createPhysicalSolarSystem } from "../data/physicalSolarSystem";
 import type { CelestialBody } from "../domain/types";
 import { magnitude, subtract, vector } from "../domain/vector";
 import {
+  calculateSpacecraftGuidance,
+  DEFAULT_SPACECRAFT_GUIDANCE,
+} from "./guidance";
+import {
   ACTIVE_SPACECRAFT_ID,
   SPACECRAFT_LAUNCH_ALTITUDE_M,
   createEarthLaunch,
 } from "./launch";
+import { NBodySimulation } from "./simulation";
 
 describe("createEarthLaunch", () => {
   it("rejects scenarios without Earth", () => {
@@ -69,4 +74,81 @@ describe("createEarthLaunch", () => {
     expect(launch.estimatedTransferSeconds).toBeGreaterThan(10_000_000);
     expect(launch.injectionSpeedMps).toBeGreaterThan(10_000);
   });
+
+  it("guides an Earth-to-Moon mission closer to the target", () => {
+    const bodies = createPhysicalSolarSystem();
+    const moon = bodies.find((body) => body.id === "moon");
+    expect(moon).toBeDefined();
+
+    const { initialDistanceM, finalDistanceM } = simulateGuidedLaunch({
+      bodies,
+      targetId: "moon",
+      stepCount: 900,
+      arrivalThresholdM: 25_000_000,
+    });
+
+    expect(finalDistanceM).toBeLessThan(initialDistanceM);
+  });
+
+  it("guides an Earth-to-Mars mission closer to the target", () => {
+    const bodies = createPhysicalSolarSystem();
+    const mars = bodies.find((body) => body.id === "mars");
+    expect(mars).toBeDefined();
+
+    const { initialDistanceM, finalDistanceM } = simulateGuidedLaunch({
+      bodies,
+      targetId: "mars",
+      stepCount: 2_000,
+      arrivalThresholdM: 25_000_000,
+    });
+
+    expect(finalDistanceM).toBeLessThan(initialDistanceM);
+  });
 });
+
+function simulateGuidedLaunch(input: {
+  readonly bodies: ReturnType<typeof createPhysicalSolarSystem>;
+  readonly targetId: string;
+  readonly stepCount: number;
+  readonly arrivalThresholdM: number;
+}): { readonly initialDistanceM: number; readonly finalDistanceM: number } {
+  const target = input.bodies.find((body) => body.id === input.targetId);
+  if (!target) throw new Error(`Missing target ${input.targetId}.`);
+  const launch = createEarthLaunch({ bodies: input.bodies, target });
+  const simulation = new NBodySimulation(input.bodies, {
+    fixedTimestepSeconds: 300,
+    minimumDistanceM: 1_000,
+  });
+  simulation.addRuntimeBody(launch.spacecraft);
+  let spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);
+  if (!spacecraft) throw new Error("Missing spacecraft.");
+  let currentTarget = simulation.bodies.find((body) => body.id === input.targetId);
+  if (!currentTarget) throw new Error("Missing target in simulation.");
+  const initialDistanceM = magnitude(subtract(spacecraft.positionM, currentTarget.positionM));
+
+  for (let index = 0; index < input.stepCount; index += 1) {
+    spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);
+    currentTarget = simulation.bodies.find((body) => body.id === input.targetId);
+    if (!spacecraft || !currentTarget) throw new Error("Missing mission body.");
+    const guidance = calculateSpacecraftGuidance({
+      spacecraft,
+      target: currentTarget,
+      config: {
+        fixedTimestepSeconds: simulation.fixedTimestepSeconds,
+        arrivalThresholdM: input.arrivalThresholdM,
+        maxAccelerationMps2: DEFAULT_SPACECRAFT_GUIDANCE.maxAccelerationMps2,
+        maxCruiseSpeedMps: DEFAULT_SPACECRAFT_GUIDANCE.maxCruiseSpeedMps,
+      },
+    });
+    simulation.applyRuntimeBodyVelocityDelta(ACTIVE_SPACECRAFT_ID, guidance.deltaVelocityMps);
+    simulation.step();
+  }
+
+  spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);
+  currentTarget = simulation.bodies.find((body) => body.id === input.targetId);
+  if (!spacecraft || !currentTarget) throw new Error("Missing final mission body.");
+  return {
+    initialDistanceM,
+    finalDistanceM: magnitude(subtract(spacecraft.positionM, currentTarget.positionM)),
+  };
+}

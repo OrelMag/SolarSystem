@@ -1,5 +1,5 @@
 import type { CelestialBody, MutableBodyState, SimulationSnapshot } from "../domain/types";
-import { add, isFiniteVector, scale } from "../domain/vector";
+import { add, isFiniteVector, scale, type Vector3 } from "../domain/vector";
 import { calculateAccelerations } from "./gravity";
 
 export interface SimulationConfig {
@@ -118,6 +118,18 @@ export class NBodySimulation {
     this.state = nextState;
     this.runtimeBodyIds.delete(id);
     return removed;
+  }
+
+  applyRuntimeBodyVelocityDelta(id: string, deltaVelocityMps: Vector3): void {
+    if (!this.runtimeBodyIds.has(id)) {
+      throw new Error(`Body "${id}" is not a runtime body.`);
+    }
+    if (!isFiniteVector(deltaVelocityMps)) {
+      throw new Error(`Velocity delta for body "${id}" must be finite.`);
+    }
+    const body = this.state.find((candidate) => candidate.id === id);
+    if (!body) throw new Error(`Runtime body "${id}" is missing from simulation state.`);
+    body.velocityMps = add(body.velocityMps, deltaVelocityMps);
   }
 
   reset(): void {

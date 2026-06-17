@@ -3,6 +3,7 @@ import type { BodyCategory, MutableBodyState } from "../domain/types";
 import { magnitude, subtract } from "../domain/vector";
 import type { LaunchTargetState, SpacecraftLaunch } from "../physics/launch";
 import { ACTIVE_SPACECRAFT_ID } from "../physics/launch";
+import type { SpacecraftGuidanceMode } from "../physics/guidance";
 
 export type LaunchTargetCategory = Extract<
   BodyCategory | OrbitalBodyCategory,
@@ -23,8 +24,10 @@ export interface LaunchMissionState {
   readonly targetName: string;
   readonly launchedElapsedSeconds: number;
   readonly estimatedTransferSeconds: number;
+  readonly arrivalThresholdM: number;
   readonly currentDistanceM: number;
   readonly closestApproachM: number;
+  readonly guidanceMode: SpacecraftGuidanceMode;
   readonly status: LaunchMissionStatus;
 }
 
@@ -95,19 +98,23 @@ export function findLaunchTargetState(input: {
 
 export function createLaunchMissionState(input: {
   readonly launch: SpacecraftLaunch;
+  readonly target: Pick<LaunchTargetState, "radiusM">;
   readonly elapsedSeconds: number;
 }): LaunchMissionState {
   const currentDistanceM = Math.max(
     0,
     input.launch.targetDistanceAtLaunchM - input.launch.launchDistanceM,
   );
+  const arrivalThresholdM = calculateArrivalThresholdM(input.target);
   return {
     targetId: input.launch.targetId,
     targetName: input.launch.targetName,
     launchedElapsedSeconds: input.elapsedSeconds,
     estimatedTransferSeconds: input.launch.estimatedTransferSeconds,
+    arrivalThresholdM,
     currentDistanceM,
     closestApproachM: currentDistanceM,
+    guidanceMode: "guided",
     status: "en-route",
   };
 }
@@ -128,9 +135,9 @@ export function updateLaunchMissionState(input: {
   const currentDistanceM = magnitude(subtract(spacecraft.positionM, target.positionM));
   const closestApproachM = Math.min(input.mission.closestApproachM, currentDistanceM);
   const elapsedMissionSeconds = input.elapsedSeconds - input.mission.launchedElapsedSeconds;
-  const arrivalThresholdM = Math.max(target.radiusM, ARRIVAL_FLOOR_M);
+  const arrivalThresholdM = input.mission.arrivalThresholdM;
   const status =
-    currentDistanceM <= arrivalThresholdM
+    input.mission.status === "arrived" || currentDistanceM <= arrivalThresholdM
       ? "arrived"
       : elapsedMissionSeconds > input.mission.estimatedTransferSeconds * 2 &&
           currentDistanceM > closestApproachM * 1.25
@@ -138,10 +145,26 @@ export function updateLaunchMissionState(input: {
         : "en-route";
   return {
     ...input.mission,
+    guidanceMode: status === "arrived" ? "station-keeping" : "guided",
     currentDistanceM,
     closestApproachM,
     status,
   };
+}
+
+export function updateLaunchMissionGuidanceMode(
+  mission: LaunchMissionState,
+  guidanceMode: SpacecraftGuidanceMode,
+): LaunchMissionState {
+  return {
+    ...mission,
+    guidanceMode,
+    status: guidanceMode === "station-keeping" ? "arrived" : mission.status,
+  };
+}
+
+export function calculateArrivalThresholdM(target: Pick<LaunchTargetState, "radiusM">): number {
+  return Math.max(target.radiusM, ARRIVAL_FLOOR_M);
 }
 
 function isLaunchTargetCategory(

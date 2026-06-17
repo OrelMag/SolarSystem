@@ -133,11 +133,15 @@ describe("NBodySimulation", () => {
     expect(simulation.bodies.map((body) => body.id)).not.toContain("spacecraft");
 
     simulation.addRuntimeBody(spacecraft);
+    simulation.applyRuntimeBodyVelocityDelta("spacecraft", vector(1, 2, 3));
+    expect(simulation.bodies.find((body) => body.id === "spacecraft")?.velocityMps).toEqual(
+      vector(1, 1_002, 3),
+    );
     simulation.reset();
     expect(simulation.bodies.map((body) => body.id)).toEqual(["star", "planet"]);
   });
 
-  it("validates runtime body state", () => {
+  it("validates runtime body state and velocity impulses", () => {
     const simulation = new NBodySimulation(createCircularBinary(), {
       fixedTimestepSeconds: 10,
       minimumDistanceM: 1,
@@ -155,5 +159,22 @@ describe("NBodySimulation", () => {
         visual: { color: 0x8ee8ff },
       }),
     ).toThrow(/positive mass/);
+    expect(() => simulation.applyRuntimeBodyVelocityDelta("planet", vector(1, 0, 0))).toThrow(
+      /not a runtime body/,
+    );
+
+    simulation.addRuntimeBody({
+      id: "spacecraft",
+      name: "Spacecraft",
+      category: "spacecraft",
+      massKg: 1_000,
+      radiusM: 10,
+      positionM: vector(2e9, 0, 0),
+      velocityMps: vector(0, 1_000, 0),
+      visual: { color: 0x8ee8ff },
+    });
+    expect(() =>
+      simulation.applyRuntimeBodyVelocityDelta("spacecraft", vector(Number.NaN, 0, 0)),
+    ).toThrow(/finite/);
   });
 });

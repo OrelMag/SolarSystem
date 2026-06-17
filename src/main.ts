@@ -15,9 +15,11 @@ import {
   createLaunchTargetOptions,
   findLaunchTargetState,
   updateLaunchMissionState,
+  updateLaunchMissionGuidanceMode,
   type LaunchMissionState,
   type LaunchMissionStatus,
 } from "./app/launchMission";
+import { calculatePhysicsStepBudget } from "./app/simulationClock";
 import {
   formatDuration,
   formatDistanceM,
@@ -56,6 +58,10 @@ import {
   validateOrbitalHierarchy,
 } from "./physics/hierarchicalOrbits";
 import { calculateAccelerations } from "./physics/gravity";
+import {
+  calculateSpacecraftGuidance,
+  DEFAULT_SPACECRAFT_GUIDANCE,
+} from "./physics/guidance";
 import { ACTIVE_SPACECRAFT_ID, createEarthLaunch } from "./physics/launch";
 import { NBodySimulation } from "./physics/simulation";
 import {
@@ -130,6 +136,14 @@ function formatTimeScale(seconds: number): string {
   if (seconds < DAY_SECONDS) return `${(seconds / 3_600).toLocaleString()} hours/s`;
   if (seconds < 365 * DAY_SECONDS) return `${(seconds / DAY_SECONDS).toLocaleString()} days/s`;
   return `${(seconds / (365.25 * DAY_SECONDS)).toFixed(2)} years/s`;
+}
+
+function calculateActiveStepBudget(): number {
+  return calculatePhysicsStepBudget({
+    timeScaleSeconds,
+    fixedTimestepSeconds: DEFAULT_FIXED_TIMESTEP_SECONDS,
+    baseMaxStepsPerFrame: DEFAULT_MAX_STEPS_PER_FRAME,
+  });
 }
 
 function createNavigatorEntries(
@@ -252,6 +266,7 @@ let running = true;
 let accumulatorSeconds = 0;
 let lastFrameTime = performance.now();
 let timeScaleSeconds = DEFAULT_TIME_SCALE_SECONDS;
+let maxStepsPerFrame = calculateActiveStepBudget();
 let initialConserved = calculateConservedQuantities(simulation.bodies);
 let latestConserved: ConservedQuantities = initialConserved;
 let lastDiagnosticsElapsed = Number.NEGATIVE_INFINITY;
@@ -350,7 +365,7 @@ function renderLaunchPanel(): void {
   launchStatusElement.classList.remove("en-route", "arrived", "missed", "paused");
 
   if (!earthAvailable) {
-    launchStatusElement.textContent = "EARTH N/A";
+    launchStatusElement.textContent = "NO EARTH";
     launchStatusElement.classList.add("paused");
   } else if (launchMission) {
     launchStatusElement.textContent = launchStatusLabel(launchMission.status);
@@ -579,6 +594,7 @@ function launchSpacecraft(): void {
   renderer.addBody(spacecraft);
   launchMission = createLaunchMissionState({
     launch,
+    target,
     elapsedSeconds: simulation.elapsedSeconds,
   });
   launchInjectionSpeedMps = launch.injectionSpeedMps;
@@ -588,6 +604,29 @@ function launchSpacecraft(): void {
   renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
   selectAndFollow(ACTIVE_SPACECRAFT_ID);
   renderLaunchPanel();
+}
+
+function applyLaunchGuidance(): void {
+  if (!launchMission || launchMission.status === "missed") return;
+  const spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);
+  const target = findLaunchTargetState({
+    id: launchMission.targetId,
+    bodies: simulation.bodies,
+    orbitalStates,
+  });
+  if (!spacecraft || !target) return;
+  const guidance = calculateSpacecraftGuidance({
+    spacecraft,
+    target,
+    config: {
+      fixedTimestepSeconds: simulation.fixedTimestepSeconds,
+      arrivalThresholdM: launchMission.arrivalThresholdM,
+      maxAccelerationMps2: DEFAULT_SPACECRAFT_GUIDANCE.maxAccelerationMps2,
+      maxCruiseSpeedMps: DEFAULT_SPACECRAFT_GUIDANCE.maxCruiseSpeedMps,
+    },
+  });
+  simulation.applyRuntimeBodyVelocityDelta(ACTIVE_SPACECRAFT_ID, guidance.deltaVelocityMps);
+  launchMission = updateLaunchMissionGuidanceMode(launchMission, guidance.mode);
 }
 
 function resetCurrentScenario(): void {
@@ -665,6 +704,7 @@ function updateSpeedFromControls(): void {
     timeScaleSeconds = Number(speedSelect.value);
     running = true;
   }
+  maxStepsPerFrame = calculateActiveStepBudget();
   speedValue.value = timeScaleSeconds === 0 ? "Paused" : formatTimeScale(timeScaleSeconds);
   updateRunningUi();
 }
@@ -882,7 +922,7 @@ function updateTelemetry(stepsThisFrame: number, clamped: boolean): void {
   elapsedElement.textContent = formatElapsed(elapsed);
   stepElement.textContent = formatDuration(DEFAULT_FIXED_TIMESTEP_SECONDS);
   timeScaleElement.textContent = speedValue.value;
-  maxStepsElement.textContent = String(DEFAULT_MAX_STEPS_PER_FRAME);
+  maxStepsElement.textContent = String(maxStepsPerFrame);
   catchupElement.textContent = clamped ? "Clamped" : "Idle";
   stepsFrameElement.textContent = String(stepsThisFrame);
 
@@ -1056,16 +1096,18 @@ function frame(now: number): void {
   let stepsThisFrame = 0;
   let clamped = false;
   if (running && timeScaleSeconds > 0) {
+    maxStepsPerFrame = calculateActiveStepBudget();
     accumulatorSeconds += realDeltaSeconds * timeScaleSeconds;
     while (
       accumulatorSeconds >= simulation.fixedTimestepSeconds &&
-      stepsThisFrame < DEFAULT_MAX_STEPS_PER_FRAME
+      stepsThisFrame < maxStepsPerFrame
     ) {
+      applyLaunchGuidance();
       simulation.step();
       accumulatorSeconds -= simulation.fixedTimestepSeconds;
       stepsThisFrame += 1;
     }
-    if (stepsThisFrame === DEFAULT_MAX_STEPS_PER_FRAME) {
+    if (accumulatorSeconds >= simulation.fixedTimestepSeconds) {
       accumulatorSeconds = Math.min(accumulatorSeconds, simulation.fixedTimestepSeconds);
       clamped = true;
     }
