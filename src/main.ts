@@ -6,7 +6,7 @@ import {
 } from "./app/diagnosticsHistory";
 import {
   DEFAULT_GIF_EXPORT_OPTIONS,
-  estimateSelectedOrbitGifExport,
+  estimateCurrentViewGifExport,
   normalizeGifExportOptions,
   type GifExportEstimate,
 } from "./app/gifExport";
@@ -159,6 +159,8 @@ const exportGifButton = requireElement<HTMLButtonElement>("export-gif");
 const cancelGifExportButton = requireElement<HTMLButtonElement>("cancel-gif-export");
 const gifExportProgress = requireElement<HTMLProgressElement>("gif-export-progress");
 const gifExportStatus = requireElement<HTMLOutputElement>("gif-export-status");
+const gifOutputWidthInput = requireElement<HTMLInputElement>("gif-output-width");
+const gifOutputHeightInput = requireElement<HTMLInputElement>("gif-output-height");
 const fitButton = requireElement<HTMLButtonElement>("fit");
 const fitInnerButton = requireElement<HTMLButtonElement>("fit-inner");
 const focusSunButton = requireElement<HTMLButtonElement>("focus-sun");
@@ -498,12 +500,25 @@ function updateSpeedFromControls(): void {
 }
 
 function estimateCurrentGifExport(): GifExportEstimate {
-  return estimateSelectedOrbitGifExport({
+  return estimateCurrentViewGifExport({
     selectedBodyId,
     scenarioId: currentScenario.id,
-    simulation,
-    options: DEFAULT_GIF_EXPORT_OPTIONS,
+    fixedTimestepSeconds: simulation.fixedTimestepSeconds,
+    options: getGifExportOptionsFromControls(),
   });
+}
+
+function getGifExportOptionsFromControls(): Partial<typeof DEFAULT_GIF_EXPORT_OPTIONS> {
+  return {
+    ...DEFAULT_GIF_EXPORT_OPTIONS,
+    outputWidthPx: Number(gifOutputWidthInput.value),
+    outputHeightPx: Number(gifOutputHeightInput.value),
+  };
+}
+
+function syncGifExportSizeControls(options: GifExportEstimate): void {
+  gifOutputWidthInput.value = String(options.outputWidthPx);
+  gifOutputHeightInput.value = String(options.outputHeightPx);
 }
 
 function setGifExportUi(input: {
@@ -523,25 +538,22 @@ function updateGifExportHint(): void {
   try {
     const estimate = estimateCurrentGifExport();
     exportGifButton.disabled = false;
-    gifExportStatus.value = `Ready: ${formatDuration(estimate.periodSeconds)}, ${estimate.frameCount} frames, ${estimate.physicsStepCount.toLocaleString()} steps.`;
+    gifExportStatus.value = `Ready: ${estimate.outputWidthPx}x${estimate.outputHeightPx}, one Earth cycle, ${estimate.frameCount} frames, ${estimate.physicsStepCount.toLocaleString()} steps.`;
   } catch (error) {
     exportGifButton.disabled = true;
     gifExportStatus.value =
-      error instanceof Error ? error.message : "Select a non-star physical body to export.";
+      error instanceof Error ? error.message : "Could not prepare current-view GIF export.";
   }
 }
 
-function createExportStage(maximumDimensionPx: number): {
+function createExportStage(widthPx: number, heightPx: number): {
   readonly container: HTMLDivElement;
   readonly labels: HTMLDivElement;
 } {
-  const aspect = Math.max(sceneElement.clientWidth, 1) / Math.max(sceneElement.clientHeight, 1);
-  const width = aspect >= 1 ? maximumDimensionPx : Math.round(maximumDimensionPx * aspect);
-  const height = aspect >= 1 ? Math.round(maximumDimensionPx / aspect) : maximumDimensionPx;
   const container = document.createElement("div");
   container.className = "gif-export-stage";
-  container.style.width = `${Math.max(width, 1)}px`;
-  container.style.height = `${Math.max(height, 1)}px`;
+  container.style.width = `${widthPx}px`;
+  container.style.height = `${heightPx}px`;
   const labels = document.createElement("div");
   labels.className = "export-labels";
   labels.setAttribute("aria-hidden", "true");
@@ -570,7 +582,7 @@ function yieldToBrowser(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
-async function exportSelectedOrbitGif(): Promise<void> {
+async function exportCurrentViewGif(): Promise<void> {
   if (activeGifExport) return;
 
   let estimate: GifExportEstimate;
@@ -586,7 +598,7 @@ async function exportSelectedOrbitGif(): Promise<void> {
 
   if (estimate.requiresConfirmation) {
     const confirmed = window.confirm(
-      `Exporting ${estimate.selectedBodyId} will run ${estimate.physicsStepCount.toLocaleString()} fixed physics steps in the background. Continue?`,
+      `Exporting the current view will run ${estimate.physicsStepCount.toLocaleString()} fixed physics steps in the background. Continue?`,
     );
     if (!confirmed) {
       setGifExportUi({ exporting: false, message: "GIF export cancelled." });
@@ -594,7 +606,9 @@ async function exportSelectedOrbitGif(): Promise<void> {
     }
   }
 
-  const options = normalizeGifExportOptions(DEFAULT_GIF_EXPORT_OPTIONS);
+  const options = normalizeGifExportOptions(getGifExportOptionsFromControls());
+  syncGifExportSizeControls(estimate);
+  const viewSnapshot = renderer.getViewSnapshot();
   const exportJob = { cancelled: false, objectUrls: [] as string[] };
   activeGifExport = exportJob;
   setGifExportUi({ exporting: true, progress: 0, message: "Preparing GIF export..." });
@@ -603,7 +617,7 @@ async function exportSelectedOrbitGif(): Promise<void> {
     fixedTimestepSeconds: simulation.fixedTimestepSeconds,
     minimumDistanceM: MINIMUM_DISTANCE_M,
   });
-  const stage = createExportStage(options.maximumDimensionPx);
+  const stage = createExportStage(options.outputWidthPx, options.outputHeightPx);
   const exportRenderer = new SolarSystemRenderer(
     stage.container,
     stage.labels,
@@ -613,15 +627,14 @@ async function exportSelectedOrbitGif(): Promise<void> {
     exportSimulation.bodies.find((body) => body.id === "sun")?.massKg ??
       exportSimulation.bodies[0]?.massKg ??
       1,
+    { pixelRatio: 1 },
   );
-  const selectedExportBody = exportSimulation.bodies.find((body) => body.id === selectedBodyId);
 
   try {
     copyRendererSettings(exportRenderer);
-    exportRenderer.setViewFrame("selected-centered", selectedBodyId, estimate.centralBodyId);
     exportRenderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
     exportRenderer.selectBody(selectedBodyId);
-    exportRenderer.frameOrbitRadius(estimate.apoapsisM, Boolean(selectedExportBody?.parentId));
+    exportRenderer.applyViewSnapshot(viewSnapshot);
 
     const gif = GIFEncoder();
     let completedSteps = 0;
@@ -649,8 +662,7 @@ async function exportSelectedOrbitGif(): Promise<void> {
       );
       exportRenderer.render();
       const frame = exportRenderer.captureFrame({
-        maximumDimensionPx: options.maximumDimensionPx,
-        caption: `${namesById.get(selectedBodyId) ?? selectedBodyId} orbit - ${formatSimulationDate(exportSimulation.elapsedSeconds)}`,
+        caption: `Current view - ${formatSimulationDate(exportSimulation.elapsedSeconds)}`,
       });
       const palette = quantize(frame.data, 256);
       const index = applyPalette(frame.data, palette);
@@ -754,8 +766,10 @@ resetButton.addEventListener("click", resetCurrentScenario);
 scenarioSelect.addEventListener("change", () => switchScenario(scenarioSelect.value));
 speedSelect.addEventListener("change", updateSpeedFromControls);
 customSpeedInput.addEventListener("input", updateSpeedFromControls);
+gifOutputWidthInput.addEventListener("input", updateGifExportHint);
+gifOutputHeightInput.addEventListener("input", updateGifExportHint);
 exportGifButton.addEventListener("click", () => {
-  void exportSelectedOrbitGif();
+  void exportCurrentViewGif();
 });
 cancelGifExportButton.addEventListener("click", () => {
   if (!activeGifExport) return;

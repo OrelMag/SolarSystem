@@ -47,10 +47,16 @@
           </select>
           <input id="custom-speed" type="number" min="1" step="1" value="604800" hidden />
           <div class="export-controls">
+            <div class="export-size-controls">
+              <label for="gif-output-width">Width</label>
+              <input id="gif-output-width" type="number" min="320" step="1" value="3440" />
+              <label for="gif-output-height">Height</label>
+              <input id="gif-output-height" type="number" min="180" step="1" value="1440" />
+            </div>
             <button id="export-gif" type="button">Export GIF</button>
             <button id="cancel-gif-export" type="button" hidden>Cancel Export</button>
             <progress id="gif-export-progress" max="1" value="0" hidden></progress>
-            <output id="gif-export-status">Select a non-star body to export one orbit.</output>
+            <output id="gif-export-status">Export the current view over one Earth cycle.</output>
           </div>
         </section>
 

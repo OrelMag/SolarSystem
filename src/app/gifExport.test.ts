@@ -1,193 +1,96 @@
 import { describe, expect, it } from "vitest";
-import type { CelestialBody } from "../domain/types";
-import { vector } from "../domain/vector";
-import { ASTRONOMICAL_UNIT_M, DAY_SECONDS, GRAVITATIONAL_CONSTANT } from "../physics/constants";
-import { NBodySimulation } from "../physics/simulation";
-import { estimateSelectedOrbitGifExport, resolveCentralBody } from "./gifExport";
-
-const sunMassKg = 1.988_47e30;
-const earthMassKg = 5.972_19e24;
-const moonMassKg = 7.342e22;
-
-function body(input: Partial<CelestialBody> & Pick<CelestialBody, "id" | "name" | "category">): CelestialBody {
-  return {
-    massKg: 1,
-    radiusM: 1,
-    positionM: vector(),
-    velocityMps: vector(),
-    visual: { color: 0xffffff },
-    ...input,
-  };
-}
-
-function simulationFor(bodies: readonly CelestialBody[]): NBodySimulation {
-  return new NBodySimulation(bodies, {
-    fixedTimestepSeconds: 300,
-    minimumDistanceM: 1,
-  });
-}
-
-function circularSpeed(centralMassKg: number, radiusM: number): number {
-  return Math.sqrt((GRAVITATIONAL_CONSTANT * centralMassKg) / radiusM);
-}
+import { DAY_SECONDS } from "../physics/constants";
+import { estimateCurrentViewGifExport, normalizeGifExportOptions } from "./gifExport";
 
 describe("GIF export estimates", () => {
-  it("derives a selected planet orbit and output settings", () => {
-    const simulation = simulationFor([
-      body({
-        id: "sun",
-        name: "Sun",
-        category: "star",
-        massKg: sunMassKg,
-        radiusM: 696_340_000,
-      }),
-      body({
-        id: "earth",
-        name: "Earth",
-        category: "planet",
-        massKg: earthMassKg,
-        radiusM: 6_371_000,
-        positionM: vector(ASTRONOMICAL_UNIT_M, 0, 0),
-        velocityMps: vector(0, circularSpeed(sunMassKg, ASTRONOMICAL_UNIT_M), 0),
-      }),
-    ]);
-
-    const estimate = estimateSelectedOrbitGifExport({
+  it("estimates a one-Earth-orbit current-view export at default dimensions", () => {
+    const estimate = estimateCurrentViewGifExport({
       selectedBodyId: "earth",
       scenarioId: "full-solar-system",
-      simulation,
+      fixedTimestepSeconds: 300,
     });
 
-    expect(estimate.centralBodyId).toBe("sun");
-    expect(estimate.fileName).toBe("solar-system-full-solar-system-earth-orbit.gif");
+    expect(estimate.selectedBodyId).toBe("earth");
+    expect(estimate.fileName).toBe("solar-system-full-solar-system-earth-current-view.gif");
+    expect(estimate.outputWidthPx).toBe(3440);
+    expect(estimate.outputHeightPx).toBe(1440);
+    expect(estimate.simulatedDurationSeconds).toBe(365.25 * DAY_SECONDS);
     expect(estimate.frameCount).toBe(180);
     expect(estimate.framesPerSecond).toBe(15);
     expect(estimate.frameDelayMs).toBe(67);
-    expect(estimate.periodSeconds / DAY_SECONDS).toBeGreaterThan(360);
-    expect(estimate.periodSeconds / DAY_SECONDS).toBeLessThan(370);
-    expect(estimate.physicsStepCount).toBe(Math.ceil(estimate.periodSeconds / 300));
+    expect(estimate.physicsStepCount).toBe(Math.ceil((365.25 * DAY_SECONDS) / 300));
   });
 
-  it("uses an explicit parent as the central body", () => {
-    const earth = body({
-      id: "earth",
-      name: "Earth",
-      category: "planet",
-      massKg: earthMassKg,
-      radiusM: 6_371_000,
-      positionM: vector(ASTRONOMICAL_UNIT_M, 0, 0),
-      velocityMps: vector(0, circularSpeed(sunMassKg, ASTRONOMICAL_UNIT_M), 0),
-    });
-    const moonRadiusM = 384_400_000;
-    const simulation = simulationFor([
-      body({ id: "sun", name: "Sun", category: "star", massKg: sunMassKg }),
-      earth,
-      body({
-        id: "moon",
-        name: "Moon",
-        category: "moon",
-        parentId: "earth",
-        massKg: moonMassKg,
-        radiusM: 1_737_400,
-        positionM: vector(ASTRONOMICAL_UNIT_M + moonRadiusM, 0, 0),
-        velocityMps: vector(
-          0,
-          circularSpeed(sunMassKg, ASTRONOMICAL_UNIT_M) +
-            circularSpeed(earthMassKg, moonRadiusM),
-          0,
-        ),
-      }),
-    ]);
-
+  it("allows stars and display-only selected ids", () => {
     expect(
-      estimateSelectedOrbitGifExport({
-        selectedBodyId: "moon",
+      estimateCurrentViewGifExport({
+        selectedBodyId: "sun",
         scenarioId: "full-solar-system",
-        simulation,
-      }).centralBodyId,
-    ).toBe("earth");
-  });
-
-  it("flags long exports from the configured threshold", () => {
-    const simulation = simulationFor([
-      body({ id: "sun", name: "Sun", category: "star", massKg: sunMassKg }),
-      body({
-        id: "slow",
-        name: "Slow",
-        category: "planet",
-        massKg: earthMassKg,
-        positionM: vector(5 * ASTRONOMICAL_UNIT_M, 0, 0),
-        velocityMps: vector(0, circularSpeed(sunMassKg, 5 * ASTRONOMICAL_UNIT_M), 0),
-      }),
-    ]);
+        fixedTimestepSeconds: 300,
+      }).fileName,
+    ).toBe("solar-system-full-solar-system-sun-current-view.gif");
 
     expect(
-      estimateSelectedOrbitGifExport({
-        selectedBodyId: "slow",
-        scenarioId: "outer",
-        simulation,
-        options: { longExportStepThreshold: 10 },
-      }).requiresConfirmation,
-    ).toBe(true);
+      estimateCurrentViewGifExport({
+        selectedBodyId: "halley",
+        scenarioId: "full-solar-system",
+        fixedTimestepSeconds: 300,
+      }).fileName,
+    ).toBe("solar-system-full-solar-system-halley-current-view.gif");
   });
 
-  it("rejects stars, missing parents, display-only ids, and unbound states", () => {
-    const sun = body({ id: "sun", name: "Sun", category: "star", massKg: sunMassKg });
-    const planet = body({
-      id: "planet",
-      name: "Planet",
-      category: "planet",
-      massKg: earthMassKg,
-      positionM: vector(ASTRONOMICAL_UNIT_M, 0, 0),
-      velocityMps: vector(0, circularSpeed(sunMassKg, ASTRONOMICAL_UNIT_M), 0),
-    });
-    const simulation = simulationFor([sun, planet]);
-
-    expect(() =>
-      estimateSelectedOrbitGifExport({ selectedBodyId: "sun", scenarioId: "s", simulation }),
-    ).toThrow(/Select a planet/);
-    expect(() =>
-      estimateSelectedOrbitGifExport({ selectedBodyId: "halley", scenarioId: "s", simulation }),
-    ).toThrow(/physical N-body/);
-
-    const missingParentSimulation = simulationFor([
-      sun,
-      { ...planet, id: "moon", parentId: "absent", category: "moon" },
-    ]);
-    expect(() =>
-      estimateSelectedOrbitGifExport({
-        selectedBodyId: "moon",
-        scenarioId: "s",
-        simulation: missingParentSimulation,
-      }),
-    ).toThrow(/parent/);
-
-    const unboundSimulation = simulationFor([
-      sun,
-      {
-        ...planet,
-        velocityMps: vector(0, 2 * circularSpeed(sunMassKg, ASTRONOMICAL_UNIT_M), 0),
+  it("uses custom dimensions, duration, and confirmation options", () => {
+    const estimate = estimateCurrentViewGifExport({
+      selectedBodyId: "moon",
+      scenarioId: "inner planets",
+      fixedTimestepSeconds: 60,
+      options: {
+        outputWidthPx: 1920,
+        outputHeightPx: 1080,
+        frameCount: 30,
+        framesPerSecond: 10,
+        simulatedDurationSeconds: 8 * DAY_SECONDS,
+        longExportStepThreshold: 10,
       },
-    ]);
-    expect(() =>
-      estimateSelectedOrbitGifExport({
-        selectedBodyId: "planet",
-        scenarioId: "s",
-        simulation: unboundSimulation,
-      }),
-    ).toThrow(/bounded elliptical/);
+    });
+
+    expect(estimate.outputWidthPx).toBe(1920);
+    expect(estimate.outputHeightPx).toBe(1080);
+    expect(estimate.frameCount).toBe(30);
+    expect(estimate.frameDelayMs).toBe(100);
+    expect(estimate.simulatedDurationSeconds).toBe(691_200);
+    expect(estimate.physicsStepCount).toBe(11_520);
+    expect(estimate.requiresConfirmation).toBe(true);
+    expect(estimate.fileName).toBe("solar-system-inner-planets-moon-current-view.gif");
   });
 
-  it("falls back to the most massive non-selected star if no sun exists", () => {
-    const primary = body({ id: "primary", name: "Primary", category: "star", massKg: sunMassKg });
-    const secondary = body({
-      id: "secondary",
-      name: "Secondary",
-      category: "star",
-      massKg: sunMassKg * 0.5,
+  it("normalizes invalid option values conservatively", () => {
+    expect(
+      normalizeGifExportOptions({
+        frameCount: 1,
+        framesPerSecond: 0,
+        outputWidthPx: 1,
+        outputHeightPx: Number.NaN,
+        longExportStepThreshold: 0,
+        simulatedDurationSeconds: Number.NaN,
+      }),
+    ).toEqual({
+      frameCount: 2,
+      framesPerSecond: 1,
+      outputWidthPx: 320,
+      outputHeightPx: 180,
+      longExportStepThreshold: 1,
+      simulatedDurationSeconds: 0,
     });
-    const planet = body({ id: "planet", name: "Planet", category: "planet" });
+  });
 
-    expect(resolveCentralBody(planet, [secondary, planet, primary]).id).toBe("primary");
+  it("rejects invalid fixed timesteps", () => {
+    expect(() =>
+      estimateCurrentViewGifExport({
+        selectedBodyId: "earth",
+        scenarioId: "inner-planets",
+        fixedTimestepSeconds: 0,
+      }),
+    ).toThrow(/positive fixed physics timestep/);
   });
 });

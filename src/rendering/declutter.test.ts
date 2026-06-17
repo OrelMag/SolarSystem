@@ -153,4 +153,52 @@ describe("calculateDeclutterVisibility", () => {
     expect(result.labelVisibleIds.has("earth")).toBe(true);
     expect(result.labelHiddenIds.has("mars")).toBe(true);
   });
+
+  it("keeps a protected moon marker visible when it overlaps its parent planet", () => {
+    const result = calculateDeclutterVisibility(
+      [
+        baseItem,
+        {
+          ...baseItem,
+          id: "moon",
+          category: "moon",
+          screenXPx: 105,
+          protectMarker: true,
+        },
+      ],
+      { viewportWidthPx: 500, viewportHeightPx: 500, paddingPx: 0 },
+    );
+
+    expect(result.visibleIds.has("earth")).toBe(true);
+    expect(result.visibleIds.has("moon")).toBe(true);
+    expect(result.hiddenIds.has("moon")).toBe(false);
+  });
+
+  it("can still hide a protected moon label when the label is crowded", () => {
+    const result = calculateDeclutterVisibility(
+      [
+        {
+          ...baseItem,
+          selected: true,
+          labelWidthPx: 40,
+          labelHeightPx: 12,
+        },
+        {
+          ...baseItem,
+          id: "moon",
+          category: "moon",
+          screenXPx: 104,
+          markerRadiusPx: 8,
+          protectMarker: true,
+          labelWidthPx: 40,
+          labelHeightPx: 12,
+        },
+      ],
+      { viewportWidthPx: 500, viewportHeightPx: 500, paddingPx: 4 },
+    );
+
+    expect(result.visibleIds.has("moon")).toBe(true);
+    expect(result.labelVisibleIds.has("earth")).toBe(true);
+    expect(result.labelHiddenIds.has("moon")).toBe(true);
+  });
 });

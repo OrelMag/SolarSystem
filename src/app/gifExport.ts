@@ -1,23 +1,23 @@
-import type { MutableBodyState } from "../domain/types";
-import { subtract } from "../domain/vector";
-import { GRAVITATIONAL_CONSTANT } from "../physics/constants";
-import { stateToOsculatingElements } from "../physics/orbitalMechanics";
-import type { NBodySimulation } from "../physics/simulation";
+import { DAY_SECONDS } from "../physics/constants";
 
-const TWO_PI = Math.PI * 2;
+const EARTH_ORBIT_SECONDS = 365.25 * DAY_SECONDS;
+const MIN_OUTPUT_WIDTH_PX = 320;
+const MIN_OUTPUT_HEIGHT_PX = 180;
 
 export interface GifExportOptions {
   readonly frameCount: number;
   readonly framesPerSecond: number;
-  readonly maximumDimensionPx: number;
+  readonly outputWidthPx: number;
+  readonly outputHeightPx: number;
   readonly longExportStepThreshold: number;
+  readonly simulatedDurationSeconds: number;
 }
 
 export interface GifExportEstimate {
   readonly selectedBodyId: string;
-  readonly centralBodyId: string;
-  readonly periodSeconds: number;
-  readonly apoapsisM: number;
+  readonly outputWidthPx: number;
+  readonly outputHeightPx: number;
+  readonly simulatedDurationSeconds: number;
   readonly frameCount: number;
   readonly framesPerSecond: number;
   readonly frameDelayMs: number;
@@ -29,107 +29,83 @@ export interface GifExportEstimate {
 export const DEFAULT_GIF_EXPORT_OPTIONS: GifExportOptions = Object.freeze({
   frameCount: 180,
   framesPerSecond: 15,
-  maximumDimensionPx: 720,
+  outputWidthPx: 3440,
+  outputHeightPx: 1440,
   longExportStepThreshold: 250_000,
+  simulatedDurationSeconds: EARTH_ORBIT_SECONDS,
 });
 
-export function estimateSelectedOrbitGifExport(input: {
+export function estimateCurrentViewGifExport(input: {
   readonly selectedBodyId: string;
   readonly scenarioId: string;
-  readonly simulation: NBodySimulation;
+  readonly fixedTimestepSeconds: number;
   readonly options?: Partial<GifExportOptions>;
 }): GifExportEstimate {
   const options = normalizeGifExportOptions(input.options);
-  const selected = input.simulation.bodies.find((body) => body.id === input.selectedBodyId);
-  if (!selected) {
-    throw new Error("GIF export is available only for physical N-body objects.");
-  }
-  if (selected.category === "star") {
-    throw new Error("Select a planet, moon, dwarf planet, or minor body to export one orbit.");
+  const fixedTimestepSeconds = finiteNonNegative(input.fixedTimestepSeconds);
+  if (!(fixedTimestepSeconds > 0)) {
+    throw new Error("GIF export requires a positive fixed physics timestep.");
   }
 
-  const central = resolveCentralBody(selected, input.simulation.bodies);
-  const relativePositionM = subtract(selected.positionM, central.positionM);
-  const relativeVelocityMps = subtract(selected.velocityMps, central.velocityMps);
-  const elements = stateToOsculatingElements(
-    relativePositionM,
-    relativeVelocityMps,
-    central.massKg + selected.massKg,
-    0,
-  );
+  const simulatedDurationSeconds = options.simulatedDurationSeconds;
+  const physicsStepCount =
+    simulatedDurationSeconds > 0
+      ? Math.ceil(simulatedDurationSeconds / fixedTimestepSeconds)
+      : 0;
 
-  if (
-    !(elements.semiMajorAxisM > 0) ||
-    !Number.isFinite(elements.semiMajorAxisM) ||
-    elements.eccentricity >= 1 ||
-    !Number.isFinite(elements.eccentricity)
-  ) {
-    throw new Error("The selected body is not currently on a bounded elliptical orbit.");
-  }
-
-  const periodSeconds = orbitalPeriodSeconds(
-    elements.semiMajorAxisM,
-    central.massKg + selected.massKg,
-  );
-  if (!(periodSeconds > 0) || !Number.isFinite(periodSeconds)) {
-    throw new Error("Could not derive a finite orbital period for the selected body.");
-  }
-
-  const physicsStepCount = Math.ceil(periodSeconds / input.simulation.fixedTimestepSeconds);
   return {
-    selectedBodyId: selected.id,
-    centralBodyId: central.id,
-    periodSeconds,
-    apoapsisM: elements.semiMajorAxisM * (1 + elements.eccentricity),
+    selectedBodyId: input.selectedBodyId,
+    outputWidthPx: options.outputWidthPx,
+    outputHeightPx: options.outputHeightPx,
+    simulatedDurationSeconds,
     frameCount: options.frameCount,
     framesPerSecond: options.framesPerSecond,
     frameDelayMs: Math.round(1_000 / options.framesPerSecond),
     physicsStepCount,
     requiresConfirmation: physicsStepCount > options.longExportStepThreshold,
-    fileName: `solar-system-${sanitizeFilePart(input.scenarioId)}-${sanitizeFilePart(selected.id)}-orbit.gif`,
+    fileName: `solar-system-${sanitizeFilePart(input.scenarioId)}-${sanitizeFilePart(input.selectedBodyId)}-current-view.gif`,
   };
 }
 
 export function normalizeGifExportOptions(options: Partial<GifExportOptions> = {}): GifExportOptions {
-  const frameCount = Math.max(2, Math.floor(options.frameCount ?? DEFAULT_GIF_EXPORT_OPTIONS.frameCount));
+  const frameCount = Math.max(
+    2,
+    Math.floor(options.frameCount ?? DEFAULT_GIF_EXPORT_OPTIONS.frameCount),
+  );
   const framesPerSecond = Math.max(
     1,
     Math.floor(options.framesPerSecond ?? DEFAULT_GIF_EXPORT_OPTIONS.framesPerSecond),
   );
-  const maximumDimensionPx = Math.max(
-    64,
-    Math.floor(options.maximumDimensionPx ?? DEFAULT_GIF_EXPORT_OPTIONS.maximumDimensionPx),
+  const outputWidthPx = Math.max(
+    MIN_OUTPUT_WIDTH_PX,
+    Math.floor(finiteNonNegative(options.outputWidthPx ?? DEFAULT_GIF_EXPORT_OPTIONS.outputWidthPx)),
+  );
+  const outputHeightPx = Math.max(
+    MIN_OUTPUT_HEIGHT_PX,
+    Math.floor(finiteNonNegative(options.outputHeightPx ?? DEFAULT_GIF_EXPORT_OPTIONS.outputHeightPx)),
   );
   const longExportStepThreshold = Math.max(
     1,
     Math.floor(options.longExportStepThreshold ?? DEFAULT_GIF_EXPORT_OPTIONS.longExportStepThreshold),
   );
-  return { frameCount, framesPerSecond, maximumDimensionPx, longExportStepThreshold };
+  const simulatedDurationSeconds = Math.max(
+    0,
+    finiteNonNegative(
+      options.simulatedDurationSeconds ?? DEFAULT_GIF_EXPORT_OPTIONS.simulatedDurationSeconds,
+    ),
+  );
+  return {
+    frameCount,
+    framesPerSecond,
+    outputWidthPx,
+    outputHeightPx,
+    longExportStepThreshold,
+    simulatedDurationSeconds,
+  };
 }
 
-export function resolveCentralBody(
-  selected: Readonly<MutableBodyState>,
-  bodies: readonly Readonly<MutableBodyState>[],
-): Readonly<MutableBodyState> {
-  if (selected.parentId) {
-    const parent = bodies.find((body) => body.id === selected.parentId);
-    if (!parent) throw new Error(`The selected body's parent "${selected.parentId}" is not loaded.`);
-    return parent;
-  }
-
-  const sun = bodies.find((body) => body.id === "sun");
-  if (sun && sun.id !== selected.id) return sun;
-
-  const stars = bodies
-    .filter((body) => body.category === "star" && body.id !== selected.id)
-    .sort((a, b) => b.massKg - a.massKg);
-  const central = stars[0];
-  if (!central) throw new Error("No central star is available for this export.");
-  return central;
-}
-
-export function orbitalPeriodSeconds(semiMajorAxisM: number, centralMassKg: number): number {
-  return TWO_PI * Math.sqrt(semiMajorAxisM ** 3 / (GRAVITATIONAL_CONSTANT * centralMassKg));
+function finiteNonNegative(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
 function sanitizeFilePart(value: string): string {

@@ -8,6 +8,7 @@ export interface DeclutterItem {
   readonly markerRadiusPx: number;
   readonly selected: boolean;
   readonly baseVisible: boolean;
+  readonly protectMarker?: boolean;
   readonly labelWidthPx?: number;
   readonly labelHeightPx?: number;
 }
@@ -74,7 +75,7 @@ export function calculateDeclutterVisibility(
       visibleIds.add(item.id);
       continue;
     }
-    if (isAlwaysVisible(item)) {
+    if (isAlwaysVisible(item) || item.protectMarker === true) {
       visibleIds.add(item.id);
       acceptedMarkerBounds.push(markerBounds);
       continue;

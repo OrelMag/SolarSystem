@@ -45,8 +45,26 @@ export type TrailMode = "off" | "selected" | "planets" | "all";
 export type TrailLengthPreset = "short" | "medium" | "long";
 
 export interface RendererFrameCaptureOptions {
-  readonly maximumDimensionPx: number;
   readonly caption?: string;
+}
+
+export interface SolarSystemRendererOptions {
+  readonly pixelRatio?: number;
+}
+
+export interface RendererViewSnapshot {
+  readonly cameraPosition: {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+  };
+  readonly controlsTarget: {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+  };
+  readonly zoom: number;
+  readonly followBodyId?: string;
 }
 
 const TRAIL_POINT_LIMITS: Readonly<Record<TrailLengthPreset, number>> = {
@@ -130,12 +148,13 @@ export class SolarSystemRenderer {
       readonly particles: readonly OrbitalParticle[];
     }[],
     private readonly centralMassKg: number,
+    options: SolarSystemRendererOptions = {},
   ) {
     const aspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1);
     this.camera = new THREE.OrthographicCamera(-55 * aspect, 55 * aspect, 55, -55, 0.1, 500);
     this.camera.position.set(0, 0, 100);
     this.camera.lookAt(0, 0, 0);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(options.pixelRatio ?? Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.append(this.renderer.domElement);
@@ -238,6 +257,40 @@ export class SolarSystemRenderer {
     this.updateDeclutterVisibility();
     this.renderer.render(this.scene, this.camera);
     this.updateLabels();
+  }
+
+  getViewSnapshot(): RendererViewSnapshot {
+    return {
+      cameraPosition: {
+        x: this.camera.position.x,
+        y: this.camera.position.y,
+        z: this.camera.position.z,
+      },
+      controlsTarget: {
+        x: this.controls.target.x,
+        y: this.controls.target.y,
+        z: this.controls.target.z,
+      },
+      zoom: this.camera.zoom,
+      followBodyId: this.followBodyId,
+    };
+  }
+
+  applyViewSnapshot(snapshot: RendererViewSnapshot): void {
+    this.camera.position.set(
+      snapshot.cameraPosition.x,
+      snapshot.cameraPosition.y,
+      snapshot.cameraPosition.z,
+    );
+    this.controls.target.set(
+      snapshot.controlsTarget.x,
+      snapshot.controlsTarget.y,
+      snapshot.controlsTarget.z,
+    );
+    this.camera.zoom = Math.max(this.controls.minZoom, Math.min(this.controls.maxZoom, snapshot.zoom));
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.setFollowBody(snapshot.followBodyId);
   }
 
   setTrailsVisible(visible: boolean): void {
@@ -452,16 +505,17 @@ export class SolarSystemRenderer {
     const sourceCanvas = this.renderer.domElement;
     const sourceWidth = Math.max(sourceCanvas.width, 1);
     const sourceHeight = Math.max(sourceCanvas.height, 1);
-    const scale = Math.min(1, options.maximumDimensionPx / Math.max(sourceWidth, sourceHeight));
-    const width = Math.max(1, Math.round(sourceWidth * scale));
-    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const width = sourceWidth;
+    const height = sourceHeight;
+    const cssWidth = Math.max(this.container.clientWidth, 1);
+    const labelScale = width / cssWidth;
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d", { willReadFrequently: true });
     if (!context) throw new Error("Could not create a 2D canvas for GIF capture.");
     context.drawImage(sourceCanvas, 0, 0, width, height);
-    this.drawLabelsForCapture(context, scale, width, height);
+    this.drawLabelsForCapture(context, labelScale, width, height);
     if (options.caption) this.drawCaptureCaption(context, options.caption, width, height);
     return context.getImageData(0, 0, width, height);
   }
@@ -924,6 +978,7 @@ export class SolarSystemRenderer {
       markerRadiusPx,
       selected: input.id === this.selectedBodyId,
       baseVisible: this.isBaseVisible(input.mesh),
+      protectMarker: input.category === "moon",
       labelWidthPx: labelSize.width,
       labelHeightPx: labelSize.height,
     };
