@@ -2,6 +2,7 @@ import { MASSIVE_BODY_FACTS } from "../data/bodyFacts";
 import type { HierarchicalBodyState } from "../domain/orbits";
 import type { MutableBodyState } from "../domain/types";
 import { magnitude, subtract, type Vector3 } from "../domain/vector";
+import { PHYSICAL_ORBITAL_BODIES } from "../data/physicalSolarSystem";
 import { ASTRONOMICAL_UNIT_M, GRAVITATIONAL_CONSTANT } from "../physics/constants";
 import {
   formatAccelerationMps2,
@@ -29,7 +30,12 @@ export function buildSelectedBodyDetail(input: {
 }): SelectedBodyDetail | undefined {
   const massive = input.massiveBodies.find((body) => body.id === input.id);
   if (massive) {
-    return buildMassiveDetail(massive, input.massiveBodies, input.accelerationsById);
+    return buildMassiveDetail(
+      massive,
+      input.massiveBodies,
+      input.namesById,
+      input.accelerationsById,
+    );
   }
   const orbital = input.orbitalStates.find((state) => state.body.id === input.id);
   if (!orbital) return undefined;
@@ -39,24 +45,46 @@ export function buildSelectedBodyDetail(input: {
 function buildMassiveDetail(
   body: Readonly<MutableBodyState>,
   bodies: readonly Readonly<MutableBodyState>[],
+  namesById: ReadonlyMap<string, string>,
   accelerationsById: ReadonlyMap<string, Vector3>,
 ): SelectedBodyDetail {
   const sun = bodies.find((candidate) => candidate.id === "sun");
-  const facts = MASSIVE_BODY_FACTS[body.id];
+  const parent = body.parentId
+    ? bodies.find((candidate) => candidate.id === body.parentId)
+    : undefined;
+  const facts =
+    MASSIVE_BODY_FACTS[body.id] ??
+    PHYSICAL_ORBITAL_BODIES.find((candidate) => candidate.id === body.id)?.facts;
   const acceleration = accelerationsById.get(body.id) ?? { x: 0, y: 0, z: 0 };
   const rows = [
     { label: "Category", value: body.category },
     { label: "Mass", value: formatMass(body.massKg) },
     { label: "Radius", value: formatDistanceM(body.radiusM) },
-    { label: "Parent", value: body.id === "sun" ? "None" : "Sun" },
     {
-      label: body.id === "sun" ? "Barycenter offset" : "Sun distance",
+      label: "Parent",
       value:
-        sun && body.id !== "sun"
+        body.id === "sun" ? "None" : namesById.get(body.parentId ?? "sun") ?? "Sun",
+    },
+    {
+      label:
+        body.id === "sun"
+          ? "Barycenter offset"
+          : parent
+            ? "Parent distance"
+            : "Sun distance",
+      value: parent
+        ? formatDistanceM(magnitude(subtract(body.positionM, parent.positionM)))
+        : sun && body.id !== "sun"
           ? formatDistanceM(magnitude(subtract(body.positionM, sun.positionM)))
           : formatDistanceM(magnitude(body.positionM)),
     },
-    { label: "Speed", value: formatSpeedMps(magnitude(body.velocityMps)) },
+    {
+      label: parent ? "Parent-relative speed" : "Speed",
+      value: formatSpeedMps(
+        magnitude(parent ? subtract(body.velocityMps, parent.velocityMps) : body.velocityMps),
+      ),
+    },
+    { label: "Barycentric speed", value: formatSpeedMps(magnitude(body.velocityMps)) },
     { label: "Acceleration", value: formatAccelerationMps2(magnitude(acceleration)) },
     { label: "Position", value: formatVector(body.positionM, "m") },
     { label: "Velocity", value: formatVector(body.velocityMps, "m/s") },
@@ -71,7 +99,9 @@ function buildMassiveDetail(
   return {
     title: body.name,
     rows,
-    note: facts?.significance ?? "No additional fact metadata is available.",
+    note:
+      facts?.significance ??
+      "This physical body participates directly in the N-body integration.",
   };
 }
 

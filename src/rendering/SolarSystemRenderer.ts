@@ -168,8 +168,14 @@ export class SolarSystemRenderer {
     for (const body of bodies) {
       const view = this.bodyViews.get(body.id);
       if (!view) continue;
-      const scenePosition = this.toScenePosition(body.positionM);
+      const scenePosition = this.bodyToScenePosition(body, bodies);
       view.mesh.position.copy(scenePosition);
+      if (body.category === "moon") {
+        const parent = body.parentId
+          ? bodies.find((candidate) => candidate.id === body.parentId)
+          : undefined;
+        if (parent) view.orbit.position.copy(this.toScenePosition(parent.positionM));
+      }
       if (
         this.shouldShowTrailFor(body.id, body.category) &&
         (view.trailPoints.length === 0 ||
@@ -180,7 +186,7 @@ export class SolarSystemRenderer {
         view.trail.geometry.setFromPoints(view.trailPoints);
         view.lastTrailSampleSeconds = elapsedSeconds;
       }
-      view.trail.visible = this.shouldShowTrailFor(body.id, body.category);
+      view.trail.visible = view.mesh.visible && this.shouldShowTrailFor(body.id, body.category);
     }
 
     for (const orbitalState of orbitalStates) {
@@ -251,7 +257,10 @@ export class SolarSystemRenderer {
 
   setPlanetPathsVisible(visible: boolean): void {
     this.planetPathsVisible = visible;
-    for (const [id, view] of this.bodyViews) view.orbit.visible = visible && id !== "sun";
+    for (const [id, view] of this.bodyViews) {
+      view.orbit.visible = visible && id !== "sun" && view.category !== "moon";
+    }
+    this.updateMoonVisibility();
   }
 
   setCometPathsVisible(visible: boolean): void {
@@ -320,10 +329,17 @@ export class SolarSystemRenderer {
     this.controls.target.copy(view.mesh.position);
     this.camera.position.x = view.mesh.position.x;
     this.camera.position.y = view.mesh.position.y;
-    const hasMoons = [...this.orbitalViews.values()].some(
-      (candidate) => candidate.body.category === "moon" && candidate.body.parentId === id,
-    );
-    const isMoon = "body" in view && view.body.category === "moon";
+    const hasMoons =
+      [...this.bodyViews.values()].some(
+        (candidate) =>
+          candidate.category === "moon" && candidate.mesh.userData.parentId === id,
+      ) ||
+      [...this.orbitalViews.values()].some(
+        (candidate) => candidate.body.category === "moon" && candidate.body.parentId === id,
+      );
+    const isMoon =
+      ("category" in view && view.category === "moon") ||
+      ("body" in view && view.body.category === "moon");
     this.camera.zoom = Math.max(
       this.camera.zoom,
       id === "sun" ? 5 : hasMoons || isMoon ? 90 : 14,
@@ -380,6 +396,7 @@ export class SolarSystemRenderer {
       const visibleRadius = calculatePhysicalMarkerRadius(body.category, body.radiusM);
       const mesh = this.createDisc(body.id, visibleRadius, body.visual.color);
       mesh.userData.category = body.category;
+      mesh.userData.parentId = body.parentId;
       if (body.id === "sun") this.addSunGlow(mesh, body.visual.emissive ?? body.visual.color);
       if (body.id === "saturn") this.addSaturnRing(mesh, visibleRadius);
       const label = this.createLabel(body.name);
@@ -473,6 +490,25 @@ export class SolarSystemRenderer {
       if (body.id === "sun") continue;
       const view = this.bodyViews.get(body.id);
       if (!view) continue;
+      if (body.category === "moon") {
+        const parent = body.parentId
+          ? bodies.find((candidate) => candidate.id === body.parentId)
+          : undefined;
+        if (!parent) continue;
+        const relativePosition = subtract(body.positionM, parent.positionM);
+        const relativeVelocity = subtract(body.velocityMps, parent.velocityMps);
+        const elements = stateToOsculatingElements(
+          relativePosition,
+          relativeVelocity,
+          parent.massKg + body.massKg,
+          J2000_JULIAN_DAY,
+        );
+        view.orbit.geometry.setFromPoints(
+          sampleOrbitPath(elements, 128).map((point) => this.toLocalSceneOffset(point)),
+        );
+        view.orbit.position.copy(this.toScenePosition(parent.positionM));
+        continue;
+      }
       const relativePosition = subtract(body.positionM, sun.positionM);
       const relativeVelocity = subtract(body.velocityMps, sun.velocityMps);
       const elements = stateToOsculatingElements(
@@ -531,6 +567,18 @@ export class SolarSystemRenderer {
     );
   }
 
+  private bodyToScenePosition(
+    body: Readonly<MutableBodyState>,
+    bodies: readonly Readonly<MutableBodyState>[],
+  ): THREE.Vector3 {
+    if (body.category !== "moon" || !body.parentId) return this.toScenePosition(body.positionM);
+    const parent = bodies.find((candidate) => candidate.id === body.parentId);
+    if (!parent) return this.toScenePosition(body.positionM);
+    return this.toScenePosition(parent.positionM).add(
+      this.toLocalSceneOffset(subtract(body.positionM, parent.positionM)),
+    );
+  }
+
   private toLocalSceneOffset(positionM: {
     x: number;
     y: number;
@@ -544,7 +592,32 @@ export class SolarSystemRenderer {
   }
 
   private updateMoonVisibility(): void {
+    const selectedPhysical = this.bodyViews.get(this.selectedBodyId);
     const selectedOrbital = this.orbitalViews.get(this.selectedBodyId)?.body;
+    const selectedParentId =
+      typeof selectedPhysical?.mesh.userData.parentId === "string"
+        ? selectedPhysical.mesh.userData.parentId
+        : selectedOrbital?.parentId;
+
+    for (const [id, view] of this.bodyViews) {
+      if (view.category !== "moon") continue;
+      const parentId =
+        typeof view.mesh.userData.parentId === "string" ? view.mesh.userData.parentId : "";
+      const visible = shouldShowMoon({
+        enabled: this.moonsVisible,
+        cameraZoom: this.camera.zoom,
+        thresholdZoom: MOON_VISIBILITY_ZOOM,
+        moonId: id,
+        parentId,
+        selectedBodyId: this.selectedBodyId,
+        selectedParentId,
+      });
+      view.mesh.visible = visible;
+      view.orbit.visible = visible;
+      view.trail.visible = visible && this.shouldShowTrailFor(id, "moon");
+      if (!visible) view.label.style.display = "none";
+    }
+
     for (const view of this.orbitalViews.values()) {
       if (view.body.category !== "moon") continue;
       const visible = shouldShowMoon({
@@ -554,7 +627,7 @@ export class SolarSystemRenderer {
         moonId: view.body.id,
         parentId: view.body.parentId,
         selectedBodyId: this.selectedBodyId,
-        selectedParentId: selectedOrbital?.parentId,
+        selectedParentId,
       });
       view.mesh.visible = visible;
       view.orbit.visible = visible;
@@ -758,7 +831,9 @@ export class SolarSystemRenderer {
     this.pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const meshes = [
-      ...[...this.bodyViews.values()].map((view) => view.mesh),
+      ...[...this.bodyViews.values()]
+        .filter((view) => view.mesh.visible)
+        .map((view) => view.mesh),
       ...[...this.orbitalViews.values()]
         .filter((view) => view.mesh.visible)
         .map((view) => view.mesh),

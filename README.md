@@ -6,8 +6,8 @@ built with TypeScript and Three.js.
 The view also includes live osculating orbit paths, dynamically propagated
 asteroid and Kuiper belts, and four selectable comets.
 
-Planetary-neighborhood exploration adds Pluto, 12 major moons, a searchable
-body navigator, zoom-aware local moon systems, and camera follow mode.
+Planetary-neighborhood exploration adds physical Pluto and 12 major moons, a
+searchable body navigator, zoom-aware local moon systems, and camera follow mode.
 
 ## Run
 
@@ -30,7 +30,7 @@ npm run build
 
 - SI units throughout the domain and physics layers
 - Symmetric pairwise Newtonian gravity
-- Fixed three-hour velocity-Verlet integration step
+- Fixed five-minute velocity-Verlet integration step
 - J2000 planetary elements converted to Cartesian state vectors
 - Barycentric correction for the Sun's initial position and velocity
 - Independent physical distance, visible body radius, and camera scales
@@ -38,16 +38,16 @@ npm run build
 - 6,000 deterministic, massless Keplerian belt particles
 - JPL orbital elements for Halley, Hale-Bopp, Encke, and 67P
 - Distance-responsive anti-solar comet tails
-- Hierarchical parent-relative propagation for Pluto and major moons
+- Physical N-body integration for Pluto and 12 major moons
+- Hierarchical parent-relative propagation for display-only comets
 - Structured discovery, gravity, orbital, and significance facts
 
 The initial orbital elements come from the
 [NASA/JPL approximate planetary positions dataset](https://ssd.jpl.nasa.gov/planets/approx_pos.html).
-The simulation is educational: it models mutual Newtonian gravity but does not
-include relativistic corrections, moons, or high-precision ephemeris terms.
-Belts and comets are massless test particles, so they do not affect planetary
-trajectories or conservation diagnostics.
-Pluto and moons use the same massless hierarchy and two-body approximation.
+The simulation is educational: it models mutual Newtonian gravity for the Sun,
+eight planets, Pluto, and 12 major moons, but does not include relativistic
+corrections or high-precision ephemeris terms. Belts and comets are massless
+test particles, so they do not affect trajectories or conservation diagnostics.
 
 ## Controls
 

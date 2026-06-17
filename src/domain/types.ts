@@ -11,6 +11,7 @@ export interface CelestialBody {
   readonly id: string;
   readonly name: string;
   readonly category: BodyCategory;
+  readonly parentId?: string;
   readonly massKg: number;
   readonly radiusM: number;
   readonly positionM: Vector3;
@@ -22,6 +23,7 @@ export interface MutableBodyState {
   readonly id: string;
   readonly name: string;
   readonly category: BodyCategory;
+  readonly parentId?: string;
   readonly massKg: number;
   readonly radiusM: number;
   positionM: Vector3;

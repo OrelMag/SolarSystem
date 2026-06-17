@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EXPLORATION_BODIES } from "../data/satellites";
+import { createPhysicalSolarSystem } from "../data/physicalSolarSystem";
 import { createSolarSystem } from "../data/solarSystem";
 import { propagateHierarchicalBodies } from "../physics/hierarchicalOrbits";
 import { buildSelectedBodyDetail } from "./selectedBody";
@@ -18,6 +19,22 @@ describe("selected body details", () => {
     expect(detail?.title).toBe("Earth");
     expect(detail?.rows.map((row) => row.label)).toContain("Acceleration");
     expect(detail?.note).toContain("life");
+  });
+
+  it("labels physical moons as simulated bodies with parent-relative values", () => {
+    const bodies = createPhysicalSolarSystem();
+    const names = new Map(bodies.map((body) => [body.id, body.name] as const));
+    const detail = buildSelectedBodyDetail({
+      id: "moon",
+      massiveBodies: bodies,
+      orbitalStates: [],
+      namesById: names,
+      accelerationsById: new Map([["moon", { x: 0.002, y: 0, z: 0 }]]),
+    });
+    expect(detail?.title).toBe("Moon");
+    expect(detail?.rows).toContainEqual({ label: "Parent", value: "Earth" });
+    expect(detail?.rows.map((row) => row.label)).toContain("Parent-relative speed");
+    expect(detail?.rows.some((row) => row.value === "Display-only massless body")).toBe(false);
   });
 
   it("labels hierarchical bodies as display-only", () => {

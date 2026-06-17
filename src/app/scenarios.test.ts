@@ -17,9 +17,12 @@ describe("scenarios", () => {
   it("keeps hierarchical bodies attached to known scenario parents", () => {
     for (const scenario of SCENARIOS) {
       const known = new Set(scenario.createBodies().map((body) => body.id));
-      for (const body of scenario.orbitalBodies) {
+      for (const body of scenario.displayOnlyOrbitalBodies) {
         expect(known.has(body.parentId), `${scenario.id}:${body.id}`).toBe(true);
         known.add(body.id);
+      }
+      for (const body of scenario.createBodies().filter((candidate) => candidate.parentId)) {
+        expect(known.has(body.parentId!), `${scenario.id}:${body.id}`).toBe(true);
       }
     }
   });

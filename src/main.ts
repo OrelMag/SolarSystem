@@ -71,6 +71,7 @@ const TIME_SCALE_LABELS = new Map<string, string>([
   ["1", "Real time"],
   ["3600", "1 hour/s"],
   ["86400", "1 day/s"],
+  ["604800", "7 days/s"],
   ["2592000", "30 days/s"],
   ["31557600", "1 year/s"],
 ]);
@@ -84,7 +85,7 @@ function requireElement<T extends HTMLElement>(id: string): T {
 function createSimulation(scenario: ScenarioDefinition): NBodySimulation {
   const bodies = scenario.createBodies();
   validateOrbitalHierarchy(
-    scenario.orbitalBodies,
+    scenario.displayOnlyOrbitalBodies,
     bodies.map((body) => body.id),
   );
   return new NBodySimulation(bodies, {
@@ -112,7 +113,12 @@ function formatTimeScale(seconds: number): string {
 }
 
 function createNavigatorEntries(
-  bodies: readonly { readonly id: string; readonly name: string; readonly category: NavigatorCategory }[],
+  bodies: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly category: NavigatorCategory;
+    readonly parentId?: string;
+  }[],
   orbitalDefinitions: readonly HierarchicalOrbitalBody[],
   namesById: ReadonlyMap<string, string>,
 ): NavigatorEntry[] {
@@ -121,7 +127,8 @@ function createNavigatorEntries(
       id: body.id,
       name: body.name,
       category: body.category,
-      parentName: body.id === "sun" ? undefined : "Sun",
+      parentName:
+        body.id === "sun" ? undefined : namesById.get(body.parentId ?? "sun") ?? "Sun",
     })),
     ...orbitalDefinitions.map((body) => ({
       id: body.id,
@@ -202,7 +209,7 @@ for (const scenario of SCENARIOS) {
 
 let currentScenario = findScenario(scenarioSelect.value || "full-solar-system");
 let simulation = createSimulation(currentScenario);
-let orbitalDefinitions = currentScenario.orbitalBodies;
+let orbitalDefinitions = currentScenario.displayOnlyOrbitalBodies;
 let orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
 let visualSettings: VisualBodyScaleSettings = loadVisualSettings(window.localStorage);
 let renderer = createRenderer();
@@ -242,6 +249,7 @@ function createRenderer(): SolarSystemRenderer {
 function buildNamesById(): Map<string, string> {
   return new Map<string, string>([
     ...simulation.bodies.map((body) => [body.id, body.name] as const),
+    ...currentScenario.physicalOrbitalBodies.map((body) => [body.id, body.name] as const),
     ...orbitalDefinitions.map((body) => [body.id, body.name] as const),
   ]);
 }
@@ -394,7 +402,7 @@ function resetCurrentScenario(): void {
 
 function switchScenario(id: string): void {
   currentScenario = findScenario(id);
-  orbitalDefinitions = currentScenario.orbitalBodies;
+  orbitalDefinitions = currentScenario.displayOnlyOrbitalBodies;
   simulation = createSimulation(currentScenario);
   orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
   namesById = buildNamesById();

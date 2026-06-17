@@ -34,17 +34,18 @@
           </div>
           <label for="scenario">Scenario</label>
           <select id="scenario"></select>
-          <label for="speed-select">Time scale <output id="speed-value">30 days/s</output></label>
+          <label for="speed-select">Time scale <output id="speed-value">7 days/s</output></label>
           <select id="speed-select">
             <option value="paused">Paused</option>
             <option value="1">Real time</option>
             <option value="3600">1 hour/s</option>
             <option value="86400">1 day/s</option>
-            <option value="2592000" selected>30 days/s</option>
+            <option value="604800" selected>7 days/s</option>
+            <option value="2592000">30 days/s</option>
             <option value="31557600">1 year/s</option>
             <option value="custom">Custom</option>
           </select>
-          <input id="custom-speed" type="number" min="1" step="1" value="2592000" hidden />
+          <input id="custom-speed" type="number" min="1" step="1" value="604800" hidden />
         </section>
 
         <section class="control-section navigator-section">
@@ -133,8 +134,8 @@
           <dl>
             <div><dt>Epoch</dt><dd id="date">2000-01-01</dd></div>
             <div><dt>Elapsed</dt><dd id="elapsed">0.00 days</dd></div>
-            <div><dt>Physics step</dt><dd id="step">3 hours</dd></div>
-            <div><dt>Time scale</dt><dd id="time-scale">30 days/s</dd></div>
+            <div><dt>Physics step</dt><dd id="step">5 minutes</dd></div>
+            <div><dt>Time scale</dt><dd id="time-scale">7 days/s</dd></div>
             <div><dt>Max steps</dt><dd id="max-steps">80</dd></div>
             <div><dt>Catch-up clamp</dt><dd id="catchup">Idle</dd></div>
             <div><dt>Energy drift</dt><dd id="energy-drift">0.00 ppm</dd></div>

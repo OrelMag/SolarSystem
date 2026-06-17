@@ -1,7 +1,10 @@
 import { BELT_DEFINITIONS, generateBeltParticles } from "../data/belts";
 import { COMETS } from "../data/comets";
-import { EXPLORATION_BODIES } from "../data/satellites";
-import { createSolarSystem, SOLAR_DATASET_METADATA } from "../data/solarSystem";
+import {
+  createPhysicalSolarSystem,
+  PHYSICAL_ORBITAL_BODIES,
+  PHYSICAL_SOLAR_DATASET_METADATA,
+} from "../data/physicalSolarSystem";
 import type {
   HierarchicalOrbitalBody,
   OrbitalParticle,
@@ -31,7 +34,8 @@ export interface ScenarioDefinition {
   readonly defaultTargetId: string;
   readonly metadata: ScenarioMetadata;
   readonly createBodies: () => CelestialBody[];
-  readonly orbitalBodies: readonly HierarchicalOrbitalBody[];
+  readonly physicalOrbitalBodies: readonly HierarchicalOrbitalBody[];
+  readonly displayOnlyOrbitalBodies: readonly HierarchicalOrbitalBody[];
   readonly belts: readonly ScenarioBelt[];
 }
 
@@ -41,12 +45,29 @@ const allBelts = (): readonly ScenarioBelt[] =>
     particles: generateBeltParticles(definition),
   }));
 
-const filterSolarBodies = (ids: readonly string[]): CelestialBody[] => {
-  const allowed = new Set(ids);
-  return createSolarSystem().filter((body) => allowed.has(body.id));
+const filterPhysicalBodies = (
+  bodies: readonly CelestialBody[],
+  allowedRoots: readonly string[],
+): CelestialBody[] => {
+  const known = new Set(allowedRoots);
+  const result = bodies.filter((body) => {
+    if (!known.has(body.id)) return false;
+    return true;
+  });
+  let added = true;
+  while (added) {
+    added = false;
+    for (const body of bodies) {
+      if (known.has(body.id) || !body.parentId || !known.has(body.parentId)) continue;
+      result.push(body);
+      known.add(body.id);
+      added = true;
+    }
+  }
+  return result;
 };
 
-const filterOrbitalBodies = (
+const filterDisplayOnlyBodies = (
   bodies: readonly HierarchicalOrbitalBody[],
   allowedParents: readonly string[],
 ): readonly HierarchicalOrbitalBody[] => {
@@ -66,11 +87,11 @@ const filterOrbitalBodies = (
 };
 
 const solarMetadata: ScenarioMetadata = {
-  source: SOLAR_DATASET_METADATA.source,
-  sourceUrl: SOLAR_DATASET_METADATA.sourceUrl,
-  epoch: SOLAR_DATASET_METADATA.epoch,
-  referenceFrame: SOLAR_DATASET_METADATA.referenceFrame,
-  notes: SOLAR_DATASET_METADATA.notes,
+  source: PHYSICAL_SOLAR_DATASET_METADATA.source,
+  sourceUrl: PHYSICAL_SOLAR_DATASET_METADATA.sourceUrl,
+  epoch: PHYSICAL_SOLAR_DATASET_METADATA.epoch,
+  referenceFrame: PHYSICAL_SOLAR_DATASET_METADATA.referenceFrame,
+  notes: PHYSICAL_SOLAR_DATASET_METADATA.notes,
 };
 
 function createTwoBodyValidation(): CelestialBody[] {
@@ -106,43 +127,62 @@ export const SCENARIOS: readonly ScenarioDefinition[] = [
   {
     id: "full-solar-system",
     label: "Full Solar System",
-    description: "Sun, eight planets, Pluto, major moons, comets, and belt particles.",
+    description: "Sun, eight planets, Pluto, physical major moons, comets, and belt particles.",
     defaultTargetId: "sun",
     metadata: solarMetadata,
-    createBodies: createSolarSystem,
-    orbitalBodies: [...COMETS, ...EXPLORATION_BODIES],
+    createBodies: createPhysicalSolarSystem,
+    physicalOrbitalBodies: PHYSICAL_ORBITAL_BODIES,
+    displayOnlyOrbitalBodies: COMETS,
     belts: allBelts(),
   },
   {
     id: "inner-planets",
     label: "Inner Planets",
-    description: "Sun, terrestrial planets, nearby moons, comets, and the main belt.",
+    description: "Sun, terrestrial planets, physical nearby moons, comets, and the main belt.",
     defaultTargetId: "earth",
     metadata: solarMetadata,
-    createBodies: () => filterSolarBodies(["sun", "mercury", "venus", "earth", "mars"]),
-    orbitalBodies: [
-      ...COMETS,
-      ...filterOrbitalBodies(EXPLORATION_BODIES, ["sun", "mercury", "venus", "earth", "mars"]),
-    ],
+    createBodies: () =>
+      filterPhysicalBodies(createPhysicalSolarSystem(), ["sun", "mercury", "venus", "earth", "mars"]),
+    physicalOrbitalBodies: PHYSICAL_ORBITAL_BODIES.filter((body) =>
+      ["earth", "mars"].includes(body.parentId),
+    ),
+    displayOnlyOrbitalBodies: filterDisplayOnlyBodies(COMETS, [
+      "sun",
+      "mercury",
+      "venus",
+      "earth",
+      "mars",
+    ]),
     belts: allBelts().filter((belt) => belt.definition.id === "main-belt"),
   },
   {
     id: "outer-planets",
     label: "Outer Planets",
-    description: "Sun, giant planets, Pluto system, major outer moons, comets, and Kuiper belt.",
+    description: "Sun, giant planets, physical Pluto system, major outer moons, comets, and Kuiper belt.",
     defaultTargetId: "jupiter",
     metadata: solarMetadata,
-    createBodies: () => filterSolarBodies(["sun", "jupiter", "saturn", "uranus", "neptune"]),
-    orbitalBodies: [
-      ...COMETS,
-      ...filterOrbitalBodies(EXPLORATION_BODIES, [
+    createBodies: () =>
+      filterPhysicalBodies(createPhysicalSolarSystem(), [
         "sun",
         "jupiter",
         "saturn",
         "uranus",
         "neptune",
+        "pluto",
       ]),
-    ],
+    physicalOrbitalBodies: PHYSICAL_ORBITAL_BODIES.filter(
+      (body) =>
+        body.id === "pluto" ||
+        ["jupiter", "saturn", "uranus", "neptune", "pluto"].includes(body.parentId),
+    ),
+    displayOnlyOrbitalBodies: filterDisplayOnlyBodies(COMETS, [
+        "sun",
+        "jupiter",
+        "saturn",
+        "uranus",
+        "neptune",
+        "pluto",
+      ]),
     belts: allBelts().filter((belt) => belt.definition.id === "kuiper-belt"),
   },
   {
@@ -158,7 +198,8 @@ export const SCENARIOS: readonly ScenarioDefinition[] = [
       notes: `One 1 AU near-circular orbit with velocity derived from GM/r; intended for diagnostics, not astronomy.`,
     },
     createBodies: createTwoBodyValidation,
-    orbitalBodies: [],
+    physicalOrbitalBodies: [],
+    displayOnlyOrbitalBodies: [],
     belts: [],
   },
 ] as const;
@@ -167,6 +208,6 @@ export function findScenario(id: string): ScenarioDefinition {
   return SCENARIOS.find((scenario) => scenario.id === id) ?? SCENARIOS[0]!;
 }
 
-export const DEFAULT_FIXED_TIMESTEP_SECONDS = 3 * 3_600;
+export const DEFAULT_FIXED_TIMESTEP_SECONDS = 300;
 export const DEFAULT_MAX_STEPS_PER_FRAME = 80;
-export const DEFAULT_TIME_SCALE_SECONDS = 30 * DAY_SECONDS;
+export const DEFAULT_TIME_SCALE_SECONDS = 7 * DAY_SECONDS;
