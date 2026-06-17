@@ -318,6 +318,38 @@ input[type="number"] {
   margin-top: 8px;
 }
 
+.export-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.export-controls button,
+.export-controls progress {
+  width: 100%;
+}
+
+.export-controls output {
+  min-height: 16px;
+  color: #828a9b;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.gif-export-stage {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  overflow: hidden;
+  background: #05070c;
+  pointer-events: none;
+}
+
+.gif-export-stage > .export-labels {
+  position: absolute;
+  inset: 0;
+}
+
 .view-buttons {
   margin-top: 18px;
   margin-bottom: 0;

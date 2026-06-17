@@ -55,6 +55,26 @@ describe("NBodySimulation", () => {
     expect(simulation.snapshot).toEqual(initial);
   });
 
+  it("clones a snapshot without sharing mutable state", () => {
+    const simulation = new NBodySimulation(createCircularBinary(), {
+      fixedTimestepSeconds: 10,
+      minimumDistanceM: 1,
+    });
+    simulation.step(3);
+    const clone = NBodySimulation.fromSnapshot(simulation.snapshot, {
+      fixedTimestepSeconds: 10,
+      minimumDistanceM: 1,
+    });
+
+    expect(clone.elapsedSeconds).toBe(30);
+    expect(clone.snapshot).toEqual(simulation.snapshot);
+
+    clone.step();
+    expect(clone.elapsedSeconds).toBe(40);
+    expect(simulation.elapsedSeconds).toBe(30);
+    expect(clone.snapshot).not.toEqual(simulation.snapshot);
+  });
+
   it("keeps a circular orbit and conserved quantities bounded", () => {
     const simulation = new NBodySimulation(createCircularBinary(), {
       fixedTimestepSeconds: 200,

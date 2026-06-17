@@ -7,11 +7,13 @@ export type ViewFrame = "barycentric" | "sun-centered" | "selected-centered";
 export function resolveViewFrameOrigin(input: {
   readonly frame: ViewFrame;
   readonly selectedBodyId: string;
+  readonly originBodyId?: string;
   readonly bodies: readonly Readonly<MutableBodyState>[];
   readonly orbitalStates: readonly HierarchicalBodyState[];
 }): Vector3 {
   if (input.frame === "barycentric") return vector();
-  const targetId = input.frame === "sun-centered" ? "sun" : input.selectedBodyId;
+  const targetId =
+    input.frame === "sun-centered" ? "sun" : input.originBodyId ?? input.selectedBodyId;
   const massive = input.bodies.find((body) => body.id === targetId);
   if (massive) return massive.positionM;
   const orbital = input.orbitalStates.find((state) => state.body.id === targetId);

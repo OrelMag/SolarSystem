@@ -46,6 +46,12 @@
             <option value="custom">Custom</option>
           </select>
           <input id="custom-speed" type="number" min="1" step="1" value="604800" hidden />
+          <div class="export-controls">
+            <button id="export-gif" type="button">Export GIF</button>
+            <button id="cancel-gif-export" type="button" hidden>Cancel Export</button>
+            <progress id="gif-export-progress" max="1" value="0" hidden></progress>
+            <output id="gif-export-status">Select a non-star body to export one orbit.</output>
+          </div>
         </section>
 
         <section class="control-section navigator-section">
@@ -117,6 +123,7 @@
           <label class="check-row"><input id="planet-paths" type="checkbox" checked /><span>Planet paths</span></label>
           <label class="check-row"><input id="main-belt" type="checkbox" checked /><span>Main asteroid belt</span></label>
           <label class="check-row"><input id="kuiper-belt" type="checkbox" checked /><span>Kuiper belt</span></label>
+          <label class="check-row"><input id="comets-toggle" type="checkbox" checked /><span>Comets</span></label>
           <label class="check-row"><input id="comet-paths" type="checkbox" checked /><span>Comet paths</span></label>
           <label class="check-row"><input id="comet-tails" type="checkbox" checked /><span>Comet tails</span></label>
           <label class="check-row"><input id="moons-toggle" type="checkbox" checked /><span>Major moons</span></label>

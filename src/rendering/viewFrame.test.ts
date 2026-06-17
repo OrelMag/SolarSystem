@@ -55,4 +55,16 @@ describe("resolveViewFrameOrigin", () => {
       }),
     ).toBe(bodies[1]?.positionM);
   });
+
+  it("can use a separate body as the selected-centered origin", () => {
+    expect(
+      resolveViewFrameOrigin({
+        frame: "selected-centered",
+        selectedBodyId: "earth",
+        originBodyId: "sun",
+        bodies,
+        orbitalStates: [],
+      }),
+    ).toBe(bodies[0]?.positionM);
+  });
 });

@@ -1,8 +1,15 @@
 import "./style.css";
+import { GIFEncoder, applyPalette, quantize } from "gifenc";
 import {
   DiagnosticsHistory,
   sparkline,
 } from "./app/diagnosticsHistory";
+import {
+  DEFAULT_GIF_EXPORT_OPTIONS,
+  estimateSelectedOrbitGifExport,
+  normalizeGifExportOptions,
+  type GifExportEstimate,
+} from "./app/gifExport";
 import {
   formatDuration,
   formatElapsed,
@@ -148,6 +155,10 @@ const scenarioSelect = requireElement<HTMLSelectElement>("scenario");
 const speedSelect = requireElement<HTMLSelectElement>("speed-select");
 const customSpeedInput = requireElement<HTMLInputElement>("custom-speed");
 const speedValue = requireElement<HTMLOutputElement>("speed-value");
+const exportGifButton = requireElement<HTMLButtonElement>("export-gif");
+const cancelGifExportButton = requireElement<HTMLButtonElement>("cancel-gif-export");
+const gifExportProgress = requireElement<HTMLProgressElement>("gif-export-progress");
+const gifExportStatus = requireElement<HTMLOutputElement>("gif-export-status");
 const fitButton = requireElement<HTMLButtonElement>("fit");
 const fitInnerButton = requireElement<HTMLButtonElement>("fit-inner");
 const focusSunButton = requireElement<HTMLButtonElement>("focus-sun");
@@ -170,6 +181,7 @@ const clearTrailsButton = requireElement<HTMLButtonElement>("clear-trails");
 const planetPathsInput = requireElement<HTMLInputElement>("planet-paths");
 const mainBeltInput = requireElement<HTMLInputElement>("main-belt");
 const kuiperBeltInput = requireElement<HTMLInputElement>("kuiper-belt");
+const cometsInput = requireElement<HTMLInputElement>("comets-toggle");
 const cometPathsInput = requireElement<HTMLInputElement>("comet-paths");
 const cometTailsInput = requireElement<HTMLInputElement>("comet-tails");
 const moonsInput = requireElement<HTMLInputElement>("moons-toggle");
@@ -227,6 +239,12 @@ let navigatorEntries = createNavigatorEntries(simulation.bodies, orbitalDefiniti
 let selectedBodyId = currentScenario.defaultTargetId;
 let filteredNavigatorEntries: NavigatorEntry[] = [];
 let activeNavigatorIndex = 0;
+let activeGifExport:
+  | {
+      cancelled: boolean;
+      readonly objectUrls: string[];
+    }
+  | undefined;
 
 function createRenderer(): SolarSystemRenderer {
   const sun = simulation.bodies.find((body) => body.id === "sun") ?? simulation.bodies[0];
@@ -261,6 +279,12 @@ function updateRunningUi(): void {
   statusElement.classList.toggle("paused", !running);
 }
 
+function formatSimulationDate(elapsedSeconds: number): string {
+  return new Date(new Date(J2000_ISO).getTime() + elapsedSeconds * 1_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
 function saveAndApplyVisualSettings(next: VisualBodyScaleSettings): void {
   visualSettings = next;
   saveVisualSettings(window.localStorage, visualSettings);
@@ -268,10 +292,26 @@ function saveAndApplyVisualSettings(next: VisualBodyScaleSettings): void {
   updateManualScaleControls();
 }
 
-function applyVisualSettingsToRenderer(): void {
-  renderer.setMarkerScaleMode(visualSettings.markerScaleMode);
-  renderer.setManualBodyScaleEnabled(visualSettings.manualBodyScaleEnabled);
-  renderer.setBodyScaleOverrides(visualSettingsToScaleMap(visualSettings));
+function applyVisualSettingsToRenderer(target = renderer): void {
+  target.setMarkerScaleMode(visualSettings.markerScaleMode);
+  target.setManualBodyScaleEnabled(visualSettings.manualBodyScaleEnabled);
+  target.setBodyScaleOverrides(visualSettingsToScaleMap(visualSettings));
+}
+
+function applyLayerSettingsToRenderer(target = renderer): void {
+  target.setDistanceScale(Number(distanceScaleInput.value));
+  target.setTrailsVisible(trailsInput.checked);
+  target.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
+  target.setTrailLengthPreset(trailLengthSelect.value as TrailLengthPreset);
+  target.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
+  target.setPlanetPathsVisible(planetPathsInput.checked);
+  target.setBeltVisible("main-belt", mainBeltInput.checked);
+  target.setBeltVisible("kuiper-belt", kuiperBeltInput.checked);
+  target.setCometsVisible(cometsInput.checked);
+  target.setCometPathsVisible(cometPathsInput.checked);
+  target.setCometTailsVisible(cometTailsInput.checked);
+  target.setMoonsVisible(moonsInput.checked);
+  target.setLabelsVisible(labelsInput.checked);
 }
 
 function updateVisualSettingsControls(): void {
@@ -331,6 +371,7 @@ function selectAndFollow(id: string): void {
   renderSelectedBody();
   updateManualScaleControls();
   renderNavigator();
+  updateGifExportHint();
 }
 
 function renderNavigator(): void {
@@ -399,6 +440,7 @@ function resetCurrentScenario(): void {
   renderSelectedBody();
   updateManualScaleControls();
   renderNavigator();
+  updateGifExportHint();
 }
 
 function switchScenario(id: string): void {
@@ -423,6 +465,7 @@ function switchScenario(id: string): void {
   renderer.setPlanetPathsVisible(planetPathsInput.checked);
   renderer.setBeltVisible("main-belt", mainBeltInput.checked);
   renderer.setBeltVisible("kuiper-belt", kuiperBeltInput.checked);
+  renderer.setCometsVisible(cometsInput.checked);
   renderer.setCometPathsVisible(cometPathsInput.checked);
   renderer.setCometTailsVisible(cometTailsInput.checked);
   renderer.setMoonsVisible(moonsInput.checked);
@@ -435,6 +478,7 @@ function switchScenario(id: string): void {
   renderSelectedBody();
   updateManualScaleControls();
   renderNavigator();
+  updateGifExportHint();
 }
 
 function updateSpeedFromControls(): void {
@@ -453,10 +497,206 @@ function updateSpeedFromControls(): void {
   updateRunningUi();
 }
 
+function estimateCurrentGifExport(): GifExportEstimate {
+  return estimateSelectedOrbitGifExport({
+    selectedBodyId,
+    scenarioId: currentScenario.id,
+    simulation,
+    options: DEFAULT_GIF_EXPORT_OPTIONS,
+  });
+}
+
+function setGifExportUi(input: {
+  readonly exporting: boolean;
+  readonly progress?: number;
+  readonly message: string;
+}): void {
+  exportGifButton.disabled = input.exporting;
+  cancelGifExportButton.hidden = !input.exporting;
+  gifExportProgress.hidden = !input.exporting;
+  if (input.progress !== undefined) gifExportProgress.value = input.progress;
+  gifExportStatus.value = input.message;
+}
+
+function updateGifExportHint(): void {
+  if (activeGifExport) return;
+  try {
+    const estimate = estimateCurrentGifExport();
+    exportGifButton.disabled = false;
+    gifExportStatus.value = `Ready: ${formatDuration(estimate.periodSeconds)}, ${estimate.frameCount} frames, ${estimate.physicsStepCount.toLocaleString()} steps.`;
+  } catch (error) {
+    exportGifButton.disabled = true;
+    gifExportStatus.value =
+      error instanceof Error ? error.message : "Select a non-star physical body to export.";
+  }
+}
+
+function createExportStage(maximumDimensionPx: number): {
+  readonly container: HTMLDivElement;
+  readonly labels: HTMLDivElement;
+} {
+  const aspect = Math.max(sceneElement.clientWidth, 1) / Math.max(sceneElement.clientHeight, 1);
+  const width = aspect >= 1 ? maximumDimensionPx : Math.round(maximumDimensionPx * aspect);
+  const height = aspect >= 1 ? Math.round(maximumDimensionPx / aspect) : maximumDimensionPx;
+  const container = document.createElement("div");
+  container.className = "gif-export-stage";
+  container.style.width = `${Math.max(width, 1)}px`;
+  container.style.height = `${Math.max(height, 1)}px`;
+  const labels = document.createElement("div");
+  labels.className = "export-labels";
+  labels.setAttribute("aria-hidden", "true");
+  container.append(labels);
+  document.body.append(container);
+  return { container, labels };
+}
+
+function copyRendererSettings(target: SolarSystemRenderer): void {
+  applyVisualSettingsToRenderer(target);
+  applyLayerSettingsToRenderer(target);
+}
+
+function downloadBlob(blob: Blob, fileName: string, objectUrls: string[]): void {
+  const url = URL.createObjectURL(blob);
+  objectUrls.push(url);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+async function exportSelectedOrbitGif(): Promise<void> {
+  if (activeGifExport) return;
+
+  let estimate: GifExportEstimate;
+  try {
+    estimate = estimateCurrentGifExport();
+  } catch (error) {
+    setGifExportUi({
+      exporting: false,
+      message: error instanceof Error ? error.message : "Could not start GIF export.",
+    });
+    return;
+  }
+
+  if (estimate.requiresConfirmation) {
+    const confirmed = window.confirm(
+      `Exporting ${estimate.selectedBodyId} will run ${estimate.physicsStepCount.toLocaleString()} fixed physics steps in the background. Continue?`,
+    );
+    if (!confirmed) {
+      setGifExportUi({ exporting: false, message: "GIF export cancelled." });
+      return;
+    }
+  }
+
+  const options = normalizeGifExportOptions(DEFAULT_GIF_EXPORT_OPTIONS);
+  const exportJob = { cancelled: false, objectUrls: [] as string[] };
+  activeGifExport = exportJob;
+  setGifExportUi({ exporting: true, progress: 0, message: "Preparing GIF export..." });
+
+  const exportSimulation = NBodySimulation.fromSnapshot(simulation.snapshot, {
+    fixedTimestepSeconds: simulation.fixedTimestepSeconds,
+    minimumDistanceM: MINIMUM_DISTANCE_M,
+  });
+  const stage = createExportStage(options.maximumDimensionPx);
+  const exportRenderer = new SolarSystemRenderer(
+    stage.container,
+    stage.labels,
+    exportSimulation.bodies,
+    orbitalDefinitions,
+    currentScenario.belts,
+    exportSimulation.bodies.find((body) => body.id === "sun")?.massKg ??
+      exportSimulation.bodies[0]?.massKg ??
+      1,
+  );
+  const selectedExportBody = exportSimulation.bodies.find((body) => body.id === selectedBodyId);
+
+  try {
+    copyRendererSettings(exportRenderer);
+    exportRenderer.setViewFrame("selected-centered", selectedBodyId, estimate.centralBodyId);
+    exportRenderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
+    exportRenderer.selectBody(selectedBodyId);
+    exportRenderer.frameOrbitRadius(estimate.apoapsisM, Boolean(selectedExportBody?.parentId));
+
+    const gif = GIFEncoder();
+    let completedSteps = 0;
+    const stepChunk = 1_000;
+
+    for (let frameIndex = 0; frameIndex < estimate.frameCount; frameIndex += 1) {
+      if (exportJob.cancelled) throw new Error("GIF export cancelled.");
+
+      const targetSteps =
+        frameIndex === estimate.frameCount - 1
+          ? estimate.physicsStepCount
+          : Math.round((estimate.physicsStepCount * frameIndex) / (estimate.frameCount - 1));
+      while (completedSteps < targetSteps) {
+        const steps = Math.min(stepChunk, targetSteps - completedSteps);
+        exportSimulation.step(steps);
+        completedSteps += steps;
+        if (completedSteps % (stepChunk * 4) === 0) await yieldToBrowser();
+      }
+
+      const exportOrbitalStates = calculateOrbitalStates(orbitalDefinitions, exportSimulation);
+      exportRenderer.update(
+        exportSimulation.bodies,
+        exportOrbitalStates,
+        exportSimulation.elapsedSeconds,
+      );
+      exportRenderer.render();
+      const frame = exportRenderer.captureFrame({
+        maximumDimensionPx: options.maximumDimensionPx,
+        caption: `${namesById.get(selectedBodyId) ?? selectedBodyId} orbit - ${formatSimulationDate(exportSimulation.elapsedSeconds)}`,
+      });
+      const palette = quantize(frame.data, 256);
+      const index = applyPalette(frame.data, palette);
+      gif.writeFrame(index, frame.width, frame.height, {
+        palette,
+        delay: estimate.frameDelayMs,
+      });
+
+      const progress = (frameIndex + 1) / estimate.frameCount;
+      setGifExportUi({
+        exporting: true,
+        progress,
+        message: `Encoding frame ${frameIndex + 1} of ${estimate.frameCount}`,
+      });
+      await yieldToBrowser();
+    }
+
+    gif.finish();
+    const bytes = gif.bytes();
+    const blobBytes = new Uint8Array(bytes.byteLength);
+    blobBytes.set(bytes);
+    const blob = new Blob([blobBytes.buffer], { type: "image/gif" });
+    downloadBlob(blob, estimate.fileName, exportJob.objectUrls);
+    setGifExportUi({
+      exporting: false,
+      progress: 1,
+      message: `Exported ${estimate.fileName}`,
+    });
+  } catch (error) {
+    setGifExportUi({
+      exporting: false,
+      message: error instanceof Error ? error.message : "GIF export failed.",
+    });
+  } finally {
+    exportRenderer.dispose();
+    stage.container.remove();
+    for (const url of exportJob.objectUrls) {
+      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    }
+    if (activeGifExport === exportJob) activeGifExport = undefined;
+  }
+}
+
 function updateTelemetry(stepsThisFrame: number, clamped: boolean): void {
   const elapsed = simulation.elapsedSeconds;
-  const currentDate = new Date(new Date(J2000_ISO).getTime() + elapsed * 1_000);
-  dateElement.textContent = currentDate.toISOString().slice(0, 10);
+  dateElement.textContent = formatSimulationDate(elapsed);
   elapsedElement.textContent = formatElapsed(elapsed);
   stepElement.textContent = formatDuration(DEFAULT_FIXED_TIMESTEP_SECONDS);
   timeScaleElement.textContent = speedValue.value;
@@ -514,6 +754,18 @@ resetButton.addEventListener("click", resetCurrentScenario);
 scenarioSelect.addEventListener("change", () => switchScenario(scenarioSelect.value));
 speedSelect.addEventListener("change", updateSpeedFromControls);
 customSpeedInput.addEventListener("input", updateSpeedFromControls);
+exportGifButton.addEventListener("click", () => {
+  void exportSelectedOrbitGif();
+});
+cancelGifExportButton.addEventListener("click", () => {
+  if (!activeGifExport) return;
+  activeGifExport.cancelled = true;
+  setGifExportUi({
+    exporting: true,
+    progress: gifExportProgress.value,
+    message: "Cancelling GIF export...",
+  });
+});
 fitButton.addEventListener("click", () => {
   renderer.stopFollowing();
   renderer.fitSystem();
@@ -569,6 +821,7 @@ mainBeltInput.addEventListener("change", () =>
 kuiperBeltInput.addEventListener("change", () =>
   renderer.setBeltVisible("kuiper-belt", kuiperBeltInput.checked),
 );
+cometsInput.addEventListener("change", () => renderer.setCometsVisible(cometsInput.checked));
 cometPathsInput.addEventListener("change", () =>
   renderer.setCometPathsVisible(cometPathsInput.checked),
 );
@@ -645,9 +898,11 @@ updateDatasetPanel();
 updateRunningUi();
 updateVisualSettingsControls();
 applyVisualSettingsToRenderer();
+applyLayerSettingsToRenderer();
 renderer.selectBody(selectedBodyId);
 renderer.focusBody(selectedBodyId, false);
 renderer.update(simulation.bodies, orbitalStates, 0);
 renderSelectedBody();
 renderNavigator();
+updateGifExportHint();
 requestAnimationFrame(frame);

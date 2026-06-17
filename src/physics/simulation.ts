@@ -55,6 +55,12 @@ export class NBodySimulation {
     this.minimumDistanceM = config.minimumDistanceM;
   }
 
+  static fromSnapshot(snapshot: SimulationSnapshot, config: SimulationConfig): NBodySimulation {
+    const simulation = new NBodySimulation(snapshot.bodies, config);
+    simulation.elapsed = snapshot.elapsedSeconds;
+    return simulation;
+  }
+
   get elapsedSeconds(): number {
     return this.elapsed;
   }

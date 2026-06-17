@@ -21,6 +21,7 @@ import {
   scaleDistanceForDisplay,
   type DistanceScaleConfig,
 } from "./distanceScale";
+import { shouldShowCometVisual } from "./cometVisibility";
 import { shouldShowMoon } from "./moonVisibility";
 import { resolveViewFrameOrigin, type ViewFrame } from "./viewFrame";
 import {
@@ -39,6 +40,11 @@ export type { ViewFrame } from "./viewFrame";
 export type { MarkerScaleMode } from "./markerSizing";
 export type TrailMode = "off" | "selected" | "planets" | "all";
 export type TrailLengthPreset = "short" | "medium" | "long";
+
+export interface RendererFrameCaptureOptions {
+  readonly maximumDimensionPx: number;
+  readonly caption?: string;
+}
 
 const TRAIL_POINT_LIMITS: Readonly<Record<TrailLengthPreset, number>> = {
   short: 180,
@@ -77,7 +83,11 @@ interface BeltView {
 export class SolarSystemRenderer {
   private readonly scene = new THREE.Scene();
   private readonly camera: THREE.OrthographicCamera;
-  private readonly renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  private readonly renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: true,
+    preserveDrawingBuffer: true,
+  });
   private readonly controls: OrbitControls;
   private readonly bodyViews = new Map<string, BodyView>();
   private readonly orbitalViews = new Map<string, OrbitalBodyView>();
@@ -90,10 +100,12 @@ export class SolarSystemRenderer {
   private planetPathsVisible = true;
   private cometPathsVisible = true;
   private cometTailsVisible = true;
+  private cometsVisible = true;
   private moonsVisible = true;
   private distanceScale: DistanceScaleConfig = DEFAULT_DISTANCE_SCALE;
   private viewFrame: ViewFrame = "barycentric";
   private viewFrameOriginM = { x: 0, y: 0, z: 0 };
+  private viewFrameOriginBodyId = "sun";
   private trailMode: TrailMode = "all";
   private trailPointLimit = TRAIL_POINT_LIMITS.medium;
   private markerScaleMode: MarkerScaleMode = "readable";
@@ -162,6 +174,7 @@ export class SolarSystemRenderer {
     this.viewFrameOriginM = resolveViewFrameOrigin({
       frame: this.viewFrame,
       selectedBodyId: this.selectedBodyId,
+      originBodyId: this.viewFrameOriginBodyId,
       bodies,
       orbitalStates,
     });
@@ -249,9 +262,14 @@ export class SolarSystemRenderer {
     }
   }
 
-  setViewFrame(frame: ViewFrame, selectedBodyId = this.selectedBodyId): void {
+  setViewFrame(
+    frame: ViewFrame,
+    selectedBodyId = this.selectedBodyId,
+    originBodyId = selectedBodyId,
+  ): void {
     this.viewFrame = frame;
     this.selectedBodyId = selectedBodyId;
+    this.viewFrameOriginBodyId = originBodyId;
     this.clearTrails();
   }
 
@@ -266,14 +284,47 @@ export class SolarSystemRenderer {
   setCometPathsVisible(visible: boolean): void {
     this.cometPathsVisible = visible;
     for (const view of this.orbitalViews.values()) {
-      if (view.body.category === "comet") view.orbit.visible = visible;
+      if (view.body.category === "comet") {
+        view.orbit.visible = shouldShowCometVisual({
+          kind: "path",
+          cometsVisible: this.cometsVisible,
+          cometPathsVisible: visible,
+        });
+      }
     }
   }
 
   setCometTailsVisible(visible: boolean): void {
     this.cometTailsVisible = visible;
     for (const view of this.orbitalViews.values()) {
-      if (view.tail) view.tail.visible = visible;
+      if (view.body.category === "comet" && view.tail) {
+        view.tail.visible = shouldShowCometVisual({
+          kind: "tail",
+          cometsVisible: this.cometsVisible,
+          cometTailsVisible: visible,
+        });
+      }
+    }
+  }
+
+  setCometsVisible(visible: boolean): void {
+    this.cometsVisible = visible;
+    for (const view of this.orbitalViews.values()) {
+      if (view.body.category !== "comet") continue;
+      view.mesh.visible = shouldShowCometVisual({ kind: "body", cometsVisible: visible });
+      view.orbit.visible = shouldShowCometVisual({
+        kind: "path",
+        cometsVisible: visible,
+        cometPathsVisible: this.cometPathsVisible,
+      });
+      if (view.tail) {
+        view.tail.visible = shouldShowCometVisual({
+          kind: "tail",
+          cometsVisible: visible,
+          cometTailsVisible: this.cometTailsVisible,
+        });
+      }
+      if (!visible) view.label.style.display = "none";
     }
   }
 
@@ -365,6 +416,12 @@ export class SolarSystemRenderer {
     this.frameAt(6.5 * this.distanceScale.scaleFactor);
   }
 
+  frameOrbitRadius(radiusM: number, localScale = false): void {
+    const displayRadiusAu =
+      (radiusM / ASTRONOMICAL_UNIT_M) * (localScale ? LOCAL_ORBIT_DISPLAY_SCALE : this.distanceScale.scaleFactor);
+    this.frameAt(Math.max(0.5, displayRadiusAu * 1.35));
+  }
+
   showAll(): void {
     this.stopFollowing();
     this.fitSystem();
@@ -377,6 +434,24 @@ export class SolarSystemRenderer {
       view.lastTrailSampleSeconds = Number.NEGATIVE_INFINITY;
     }
     this.lastOrbitRefreshSeconds = Number.NEGATIVE_INFINITY;
+  }
+
+  captureFrame(options: RendererFrameCaptureOptions): ImageData {
+    const sourceCanvas = this.renderer.domElement;
+    const sourceWidth = Math.max(sourceCanvas.width, 1);
+    const sourceHeight = Math.max(sourceCanvas.height, 1);
+    const scale = Math.min(1, options.maximumDimensionPx / Math.max(sourceWidth, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("Could not create a 2D canvas for GIF capture.");
+    context.drawImage(sourceCanvas, 0, 0, width, height);
+    this.drawLabelsForCapture(context, scale, width, height);
+    if (options.caption) this.drawCaptureCaption(context, options.caption, width, height);
+    return context.getImageData(0, 0, width, height);
   }
 
   dispose(): void {
@@ -540,7 +615,13 @@ export class SolarSystemRenderer {
         );
       }
       view.orbit.visible =
-        orbitalState.body.category === "comet" ? this.cometPathsVisible : true;
+        orbitalState.body.category === "comet"
+          ? shouldShowCometVisual({
+              kind: "path",
+              cometsVisible: this.cometsVisible,
+              cometPathsVisible: this.cometPathsVisible,
+            })
+          : true;
     }
   }
 
@@ -557,7 +638,12 @@ export class SolarSystemRenderer {
     tail.geometry.setFromPoints([cometPosition, cometPosition.clone().add(away)]);
     const material = tail.material;
     if (material instanceof THREE.LineBasicMaterial) material.opacity = activity * 0.72;
-    tail.visible = this.cometTailsVisible && activity > 0.02;
+    tail.visible = shouldShowCometVisual({
+      kind: "tail",
+      cometsVisible: this.cometsVisible,
+      cometTailsVisible: this.cometTailsVisible,
+      tailActive: activity > 0.02,
+    });
   }
 
   private orbitalStateToScenePosition(state: HierarchicalBodyState): THREE.Vector3 {
@@ -785,6 +871,54 @@ export class SolarSystemRenderer {
         }),
       ),
     );
+  }
+
+  private drawLabelsForCapture(
+    context: CanvasRenderingContext2D,
+    scale: number,
+    width: number,
+    height: number,
+  ): void {
+    if (!this.labelsVisible) return;
+    const cssWidth = Math.max(this.container.clientWidth, 1);
+    const cssHeight = Math.max(this.container.clientHeight, 1);
+    context.save();
+    context.font = `${Math.max(8, Math.round(9 * scale))}px "DM Mono", monospace`;
+    context.textBaseline = "middle";
+    context.shadowColor = "#05070c";
+    context.shadowBlur = Math.max(2, 4 * scale);
+    for (const label of this.labelsContainer.querySelectorAll<HTMLDivElement>(".body-label")) {
+      if (label.style.display === "none" || !label.textContent) continue;
+      const left = Number.parseFloat(label.style.left);
+      const top = Number.parseFloat(label.style.top);
+      if (!Number.isFinite(left) || !Number.isFinite(top)) continue;
+      const x = (left / cssWidth) * width;
+      const y = (top / cssHeight) * height;
+      context.fillStyle = label.style.color || "#aeb6c6";
+      context.fillText(label.textContent, x, y);
+    }
+    context.restore();
+  }
+
+  private drawCaptureCaption(
+    context: CanvasRenderingContext2D,
+    caption: string,
+    width: number,
+    height: number,
+  ): void {
+    const padding = Math.max(10, Math.round(width * 0.018));
+    const fontSize = Math.max(10, Math.round(width * 0.017));
+    context.save();
+    context.font = `${fontSize}px "DM Mono", monospace`;
+    context.textBaseline = "bottom";
+    const metrics = context.measureText(caption);
+    const labelWidth = Math.min(metrics.width + padding * 2, width - padding * 2);
+    const labelHeight = fontSize + padding;
+    context.fillStyle = "rgba(5, 7, 12, 0.72)";
+    context.fillRect(padding, height - labelHeight - padding, labelWidth, labelHeight);
+    context.fillStyle = "#e9edf5";
+    context.fillText(caption, padding * 2, height - padding * 1.5);
+    context.restore();
   }
 
   private updateLabels(): void {
