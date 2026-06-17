@@ -81,6 +81,23 @@
 
         <section class="control-section">
           <div class="section-heading"><span>View Layers</span></div>
+          <label for="marker-scale-mode">Body size</label>
+          <select id="marker-scale-mode">
+            <option value="readable" selected>Readable</option>
+            <option value="physical">Physical</option>
+          </select>
+          <label class="check-row"><input id="manual-scale-enabled" type="checkbox" /><span>Manual body scale overrides</span></label>
+          <div id="manual-scale-controls" class="manual-scale-controls" hidden>
+            <label for="body-scale">
+              <span id="body-scale-name">Selected body</span>
+              <output id="body-scale-value">1.00x</output>
+            </label>
+            <input id="body-scale" type="range" min="0.25" max="4" step="0.05" value="1" />
+            <div class="button-row view-buttons">
+              <button id="reset-body-scale" type="button">Reset Selected</button>
+              <button id="reset-all-body-scales" type="button">Reset All</button>
+            </div>
+          </div>
           <label for="trail-mode">Trails</label>
           <select id="trail-mode">
             <option value="all">All massive bodies</option>

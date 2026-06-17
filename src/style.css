@@ -296,6 +296,23 @@ input[type="number"] {
   accent-color: #e6b35b;
 }
 
+.manual-scale-controls {
+  margin: 6px 0 18px;
+  padding: 12px;
+  border: 1px solid #202633;
+  border-radius: 3px;
+  background: #0d1119;
+}
+
+.manual-scale-controls .button-row {
+  margin: 10px 0 0;
+}
+
+.manual-scale-controls button {
+  min-height: 32px;
+  font-size: 10px;
+}
+
 .control-section > button {
   width: 100%;
   margin-top: 8px;

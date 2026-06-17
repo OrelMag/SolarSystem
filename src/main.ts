@@ -16,6 +16,15 @@ import {
   type ScenarioDefinition,
 } from "./app/scenarios";
 import { buildSelectedBodyDetail } from "./app/selectedBody";
+import {
+  loadVisualSettings,
+  resetAllBodyScaleOverrides,
+  resetBodyScaleOverride,
+  saveVisualSettings,
+  setBodyScaleOverride,
+  visualSettingsToScaleMap,
+  type VisualBodyScaleSettings,
+} from "./app/visualSettings";
 import type { HierarchicalBodyState, HierarchicalOrbitalBody } from "./domain/orbits";
 import { magnitude } from "./domain/vector";
 import {
@@ -32,6 +41,7 @@ import { calculateAccelerations } from "./physics/gravity";
 import { NBodySimulation } from "./physics/simulation";
 import {
   SolarSystemRenderer,
+  type MarkerScaleMode,
   type TrailLengthPreset,
   type TrailMode,
   type ViewFrame,
@@ -138,6 +148,14 @@ const showAllButton = requireElement<HTMLButtonElement>("show-all");
 const stopFollowButton = requireElement<HTMLButtonElement>("stop-follow");
 const viewFrameSelect = requireElement<HTMLSelectElement>("view-frame");
 const trailsInput = requireElement<HTMLInputElement>("trails");
+const markerScaleModeSelect = requireElement<HTMLSelectElement>("marker-scale-mode");
+const manualScaleEnabledInput = requireElement<HTMLInputElement>("manual-scale-enabled");
+const manualScaleControls = requireElement("manual-scale-controls");
+const bodyScaleNameElement = requireElement("body-scale-name");
+const bodyScaleInput = requireElement<HTMLInputElement>("body-scale");
+const bodyScaleValue = requireElement<HTMLOutputElement>("body-scale-value");
+const resetBodyScaleButton = requireElement<HTMLButtonElement>("reset-body-scale");
+const resetAllBodyScalesButton = requireElement<HTMLButtonElement>("reset-all-body-scales");
 const trailModeSelect = requireElement<HTMLSelectElement>("trail-mode");
 const trailLengthSelect = requireElement<HTMLSelectElement>("trail-length");
 const clearTrailsButton = requireElement<HTMLButtonElement>("clear-trails");
@@ -186,6 +204,7 @@ let currentScenario = findScenario(scenarioSelect.value || "full-solar-system");
 let simulation = createSimulation(currentScenario);
 let orbitalDefinitions = currentScenario.orbitalBodies;
 let orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+let visualSettings: VisualBodyScaleSettings = loadVisualSettings(window.localStorage);
 let renderer = createRenderer();
 let running = true;
 let accumulatorSeconds = 0;
@@ -233,6 +252,34 @@ function updateRunningUi(): void {
   statusElement.classList.toggle("paused", !running);
 }
 
+function saveAndApplyVisualSettings(next: VisualBodyScaleSettings): void {
+  visualSettings = next;
+  saveVisualSettings(window.localStorage, visualSettings);
+  applyVisualSettingsToRenderer();
+  updateManualScaleControls();
+}
+
+function applyVisualSettingsToRenderer(): void {
+  renderer.setMarkerScaleMode(visualSettings.markerScaleMode);
+  renderer.setManualBodyScaleEnabled(visualSettings.manualBodyScaleEnabled);
+  renderer.setBodyScaleOverrides(visualSettingsToScaleMap(visualSettings));
+}
+
+function updateVisualSettingsControls(): void {
+  markerScaleModeSelect.value = visualSettings.markerScaleMode;
+  manualScaleEnabledInput.checked = visualSettings.manualBodyScaleEnabled;
+  manualScaleControls.hidden = !visualSettings.manualBodyScaleEnabled;
+  updateManualScaleControls();
+}
+
+function updateManualScaleControls(): void {
+  const selectedName = namesById.get(selectedBodyId) ?? selectedBodyId;
+  const selectedScale = visualSettings.bodyScaleOverrides[selectedBodyId] ?? 1;
+  bodyScaleNameElement.textContent = selectedName;
+  bodyScaleInput.value = selectedScale.toFixed(2);
+  bodyScaleValue.value = `${selectedScale.toFixed(2)}x`;
+}
+
 function renderSelectedBody(): void {
   const accelerations = calculateAccelerations(simulation.bodies, MINIMUM_DISTANCE_M);
   const accelerationsById = new Map(
@@ -273,6 +320,7 @@ function selectAndFollow(id: string): void {
   renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
   renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
   renderSelectedBody();
+  updateManualScaleControls();
   renderNavigator();
 }
 
@@ -340,6 +388,7 @@ function resetCurrentScenario(): void {
   renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
   renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
   renderSelectedBody();
+  updateManualScaleControls();
   renderNavigator();
 }
 
@@ -356,6 +405,7 @@ function switchScenario(id: string): void {
   searchInput.value = "";
   renderer.dispose();
   renderer = createRenderer();
+  applyVisualSettingsToRenderer();
   renderer.setDistanceScale(Number(distanceScaleInput.value));
   renderer.setTrailsVisible(trailsInput.checked);
   renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
@@ -374,6 +424,7 @@ function switchScenario(id: string): void {
   renderer.selectBody(selectedBodyId);
   renderer.focusBody(selectedBodyId, false);
   renderSelectedBody();
+  updateManualScaleControls();
   renderNavigator();
 }
 
@@ -469,6 +520,29 @@ stopFollowButton.addEventListener("click", () => renderer.stopFollowing());
 viewFrameSelect.addEventListener("change", () => {
   renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
 });
+markerScaleModeSelect.addEventListener("change", () => {
+  saveAndApplyVisualSettings({
+    ...visualSettings,
+    markerScaleMode: markerScaleModeSelect.value as MarkerScaleMode,
+  });
+});
+manualScaleEnabledInput.addEventListener("change", () => {
+  saveAndApplyVisualSettings({
+    ...visualSettings,
+    manualBodyScaleEnabled: manualScaleEnabledInput.checked,
+  });
+});
+bodyScaleInput.addEventListener("input", () => {
+  saveAndApplyVisualSettings(
+    setBodyScaleOverride(visualSettings, selectedBodyId, Number(bodyScaleInput.value)),
+  );
+});
+resetBodyScaleButton.addEventListener("click", () => {
+  saveAndApplyVisualSettings(resetBodyScaleOverride(visualSettings, selectedBodyId));
+});
+resetAllBodyScalesButton.addEventListener("click", () => {
+  saveAndApplyVisualSettings(resetAllBodyScaleOverrides(visualSettings));
+});
 trailsInput.addEventListener("change", () => renderer.setTrailsVisible(trailsInput.checked));
 trailModeSelect.addEventListener("change", () => {
   renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
@@ -560,6 +634,8 @@ speedSelect.value = String(DEFAULT_TIME_SCALE_SECONDS);
 speedValue.value = TIME_SCALE_LABELS.get(speedSelect.value) ?? formatTimeScale(timeScaleSeconds);
 updateDatasetPanel();
 updateRunningUi();
+updateVisualSettingsControls();
+applyVisualSettingsToRenderer();
 renderer.selectBody(selectedBodyId);
 renderer.focusBody(selectedBodyId, false);
 renderer.update(simulation.bodies, orbitalStates, 0);

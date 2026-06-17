@@ -23,6 +23,12 @@ import {
 } from "./distanceScale";
 import { shouldShowMoon } from "./moonVisibility";
 import { resolveViewFrameOrigin, type ViewFrame } from "./viewFrame";
+import {
+  calculateMarkerSizing,
+  calculatePhysicalMarkerRadius,
+  type MarkerCategory,
+  type MarkerScaleMode,
+} from "./markerSizing";
 
 const TRAIL_SAMPLE_SECONDS = 10 * DAY_SECONDS;
 const ORBIT_REFRESH_SECONDS = 30 * DAY_SECONDS;
@@ -30,6 +36,7 @@ const MOON_VISIBILITY_ZOOM = 28;
 const LOCAL_ORBIT_DISPLAY_SCALE = 80;
 
 export type { ViewFrame } from "./viewFrame";
+export type { MarkerScaleMode } from "./markerSizing";
 export type TrailMode = "off" | "selected" | "planets" | "all";
 export type TrailLengthPreset = "short" | "medium" | "long";
 
@@ -45,6 +52,9 @@ interface BodyView {
   readonly trail: THREE.Line;
   readonly orbit: THREE.Line;
   readonly trailPoints: THREE.Vector3[];
+  readonly baseWorldRadius: number;
+  readonly physicalRadiusM: number;
+  readonly category: MarkerCategory;
   lastTrailSampleSeconds: number;
 }
 
@@ -53,6 +63,7 @@ interface OrbitalBodyView {
   readonly mesh: THREE.Mesh;
   readonly label: HTMLDivElement;
   readonly orbit: THREE.Line;
+  readonly baseWorldRadius: number;
   readonly tail?: THREE.Line;
 }
 
@@ -85,6 +96,9 @@ export class SolarSystemRenderer {
   private viewFrameOriginM = { x: 0, y: 0, z: 0 };
   private trailMode: TrailMode = "all";
   private trailPointLimit = TRAIL_POINT_LIMITS.medium;
+  private markerScaleMode: MarkerScaleMode = "readable";
+  private manualBodyScaleEnabled = false;
+  private bodyScaleOverrides: ReadonlyMap<string, number> = new Map();
   private selectionHandler: ((id: string) => void) | undefined;
   private followChangeHandler: ((id: string | undefined) => void) | undefined;
   private followBodyId: string | undefined;
@@ -197,6 +211,7 @@ export class SolarSystemRenderer {
 
   render(): void {
     this.controls.update();
+    this.updateMarkerSizes();
     this.renderer.render(this.scene, this.camera);
     this.updateLabels();
   }
@@ -273,6 +288,21 @@ export class SolarSystemRenderer {
     this.clearTrails();
   }
 
+  setMarkerScaleMode(mode: MarkerScaleMode): void {
+    this.markerScaleMode = mode;
+    this.updateMarkerSizes();
+  }
+
+  setManualBodyScaleEnabled(enabled: boolean): void {
+    this.manualBodyScaleEnabled = enabled;
+    this.updateMarkerSizes();
+  }
+
+  setBodyScaleOverrides(overrides: ReadonlyMap<string, number>): void {
+    this.bodyScaleOverrides = new Map(overrides);
+    this.updateMarkerSizes();
+  }
+
   selectBody(id: string): void {
     this.selectedBodyId = id;
     for (const [bodyId, view] of this.bodyViews) {
@@ -347,10 +377,7 @@ export class SolarSystemRenderer {
 
   private createBodyViews(bodies: readonly Readonly<MutableBodyState>[]): void {
     for (const body of bodies) {
-      const visibleRadius =
-        body.category === "star"
-          ? 0.22
-          : Math.max(0.11, Math.min(0.38, Math.log10(body.radiusM) * 0.075 - 0.35));
+      const visibleRadius = calculatePhysicalMarkerRadius(body.category, body.radiusM);
       const mesh = this.createDisc(body.id, visibleRadius, body.visual.color);
       mesh.userData.category = body.category;
       if (body.id === "sun") this.addSunGlow(mesh, body.visual.emissive ?? body.visual.color);
@@ -365,6 +392,9 @@ export class SolarSystemRenderer {
         trail,
         orbit,
         trailPoints: [],
+        baseWorldRadius: visibleRadius,
+        physicalRadiusM: body.radiusM,
+        category: body.category,
         lastTrailSampleSeconds: Number.NEGATIVE_INFINITY,
       });
     }
@@ -372,19 +402,14 @@ export class SolarSystemRenderer {
 
   private createOrbitalViews(bodies: readonly HierarchicalOrbitalBody[]): void {
     for (const body of bodies) {
-      const radius =
-        body.category === "moon"
-          ? Math.max(0.055, Math.min(0.13, Math.log10(body.radiusM) * 0.035 - 0.08))
-          : body.category === "dwarf-planet"
-            ? 0.15
-            : 0.13;
+      const radius = calculatePhysicalMarkerRadius(body.category, body.radiusM);
       const mesh = this.createDisc(body.id, radius, body.visual.color);
       mesh.userData.category = body.category;
       const label = this.createLabel(body.name);
       const orbit = this.createLine(body.visual.color, body.category === "moon" ? 0.32 : 0.24);
       const tail =
         body.category === "comet" ? this.createLine(body.visual.color, 0.7) : undefined;
-      this.orbitalViews.set(body.id, { body, mesh, label, orbit, tail });
+      this.orbitalViews.set(body.id, { body, mesh, label, orbit, baseWorldRadius: radius, tail });
     }
   }
 
@@ -549,6 +574,53 @@ export class SolarSystemRenderer {
     this.camera.position.add(delta);
   }
 
+  private updateMarkerSizes(): void {
+    const viewportHeightPx = Math.max(this.container.clientHeight, 1);
+    const cameraWorldHeight = Math.abs(this.camera.top - this.camera.bottom);
+    for (const [id, view] of this.bodyViews) {
+      this.applyMarkerSize(id, view.mesh, {
+        category: view.category,
+        physicalRadiusM: view.physicalRadiusM,
+        baseWorldRadius: view.baseWorldRadius,
+      }, viewportHeightPx, cameraWorldHeight);
+    }
+    for (const [id, view] of this.orbitalViews) {
+      this.applyMarkerSize(id, view.mesh, {
+        category: view.body.category,
+        physicalRadiusM: view.body.radiusM,
+        baseWorldRadius: view.baseWorldRadius,
+      }, viewportHeightPx, cameraWorldHeight);
+    }
+  }
+
+  private applyMarkerSize(
+    id: string,
+    mesh: THREE.Mesh,
+    body: {
+      readonly category: MarkerCategory;
+      readonly physicalRadiusM: number;
+      readonly baseWorldRadius: number;
+    },
+    viewportHeightPx: number,
+    cameraWorldHeight: number,
+  ): void {
+    const sizing = calculateMarkerSizing({
+      mode: this.markerScaleMode,
+      category: body.category,
+      physicalRadiusM: body.physicalRadiusM,
+      baseWorldRadius: body.baseWorldRadius,
+      selected: id === this.selectedBodyId,
+      cameraZoom: this.camera.zoom,
+      viewportHeightPx,
+      cameraWorldHeight,
+      manualScaleEnabled: this.manualBodyScaleEnabled,
+      manualScale: this.bodyScaleOverrides.get(id),
+    });
+    const scale = sizing.worldRadius / body.baseWorldRadius;
+    mesh.scale.setScalar(Number.isFinite(scale) && scale > 0 ? scale : 1);
+    mesh.userData.renderRadiusPx = sizing.pixelRadius;
+  }
+
   private createDisc(id: string, radius: number, color: number): THREE.Mesh {
     const mesh = new THREE.Mesh(
       new THREE.CircleGeometry(radius, 32),
@@ -657,8 +729,12 @@ export class SolarSystemRenderer {
       }
       const screen = view.mesh.position.clone().project(this.camera);
       const visible = Math.abs(screen.x) <= 1.1 && Math.abs(screen.y) <= 1.1;
+      const radiusPx =
+        typeof view.mesh.userData.renderRadiusPx === "number"
+          ? view.mesh.userData.renderRadiusPx
+          : 0;
       view.label.style.display = visible ? "block" : "none";
-      view.label.style.left = `${(screen.x * 0.5 + 0.5) * width}px`;
+      view.label.style.left = `${(screen.x * 0.5 + 0.5) * width + radiusPx + 8}px`;
       view.label.style.top = `${(-screen.y * 0.5 + 0.5) * height}px`;
     }
   }
