@@ -141,6 +141,38 @@ dt,
   font-size: 10px;
 }
 
+.section-toggle {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+.section-toggle::before {
+  content: "v";
+  display: inline-block;
+  width: 14px;
+  color: #596173;
+}
+
+.section-toggle[aria-expanded="false"]::before {
+  content: ">";
+}
+
+.section-toggle:hover {
+  color: #e6b35b;
+  background: transparent;
+}
+
+.control-section.collapsed .section-heading {
+  margin-bottom: 0;
+}
+
 .status {
   color: #6fd6a2;
   font-size: 8px;

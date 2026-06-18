@@ -1,6 +1,7 @@
 import "./style.css";
 import { GIFEncoder, applyPalette, quantize } from "gifenc";
 import { formatDatasetNotes } from "./app/datasetPanel";
+import { setupCollapsibleSections } from "./app/collapsibleSections";
 import { formatDriftPartsPerMillion } from "./app/diagnosticsPanel";
 import { requireElement } from "./app/dom";
 import {
@@ -243,6 +244,8 @@ const datasetSourceElement = requireElement("dataset-source");
 const datasetEpochElement = requireElement("dataset-epoch");
 const datasetFrameElement = requireElement("dataset-frame");
 const datasetNotesElement = requireElement("dataset-notes");
+const panelElement = document.querySelector<HTMLElement>(".panel");
+if (!panelElement) throw new Error("Missing controls panel.");
 
 for (const scenario of SCENARIOS) {
   const option = document.createElement("option");
@@ -1121,6 +1124,8 @@ searchInput.addEventListener("keydown", (event) => {
     searchInput.blur();
   }
 });
+
+setupCollapsibleSections({ panel: panelElement });
 
 function frame(now: number): void {
   const realDeltaSeconds = Math.min((now - lastFrameTime) / 1_000, 0.1);
