@@ -24,6 +24,13 @@ Then open the local URL printed by Vite.
 npm run typecheck
 npm test
 npm run build
+npm run test:e2e
+```
+
+Or run the complete local release check:
+
+```sh
+npm run test:all
 ```
 
 ## Model
@@ -31,9 +38,10 @@ npm run build
 - SI units throughout the domain and physics layers
 - Symmetric pairwise Newtonian gravity
 - Fixed five-minute velocity-Verlet integration step
-- J2000 planetary elements converted to Cartesian state vectors
-- Barycentric correction for the Sun's initial position and velocity
+- Selectable JPL approximate-element and Horizons Cartesian datasets
+- Barycentric correction for the approximate dataset's initial Sun state
 - Independent physical distance, visible body radius, and camera scales
+- Explicit minimum-distance collision policy with structured simulation errors
 - Live planet paths recovered from current N-body state vectors
 - 6,000 deterministic, massless Keplerian belt particles
 - JPL orbital elements for Halley, Hale-Bopp, Encke, and 67P
@@ -44,10 +52,30 @@ npm run build
 
 The initial orbital elements come from the
 [NASA/JPL approximate planetary positions dataset](https://ssd.jpl.nasa.gov/planets/approx_pos.html).
+The Horizons Planets scenario uses a checked-in Cartesian state-vector snapshot
+queried from the [NASA/JPL Horizons API](https://ssd-api.jpl.nasa.gov/doc/horizons.html)
+for J2000.0 TDB, centered on the Solar System barycenter in the ecliptic of
+J2000.0 reference frame. Horizons positions are stored from source kilometres
+and velocities from kilometres per second, then converted to SI units at load
+time.
+
 The simulation is educational: it models mutual Newtonian gravity for the Sun,
 eight planets, Pluto, and 12 major moons, but does not include relativistic
 corrections or high-precision ephemeris terms. Belts and comets are massless
 test particles, so they do not affect trajectories or conservation diagnostics.
+
+## Validation
+
+The deterministic conservation fixture runs a circular two-body system with a
+one-hour fixed timestep for 1, 10, and 100 simulated years. The documented
+tolerances are:
+
+- Energy drift: at most `1e-8`
+- Angular-momentum drift: at most `1e-12`
+
+The browser smoke suite starts Vite with Playwright/Chromium and covers load,
+nonblank canvas capture, pause/resume, speed change, reset, search/selection,
+and mobile collapsed controls.
 
 ## Controls
 
@@ -64,5 +92,22 @@ test particles, so they do not affect trajectories or conservation diagnostics.
 - Expand all displayed distances up to 8x for readability without changing any
   physical state or orbital calculation. Both framing controls account for the
   selected scale.
+- Toggle the barycenter marker to see the current center of mass in the active
+  view frame.
+
+Distance scaling, body marker scaling, camera pan, and zoom are visual
+transforms only. They never feed back into body position, velocity, mass, time,
+or the gravity calculation.
+
+## Release Checklist
+
+- Sun and eight planets load from a documented astronomical dataset.
+- Physics advances through fixed-timestep velocity-Verlet N-body gravity.
+- Energy and angular-momentum drift are measured against documented tolerances.
+- Physics/data modules remain free of rendering, UI, app, Three.js, and DOM
+  dependencies.
+- Pan, zoom, labels, trails, pause/resume, reset, speed controls, diagnostics,
+  barycenter overlay, and mobile controls work in browser smoke tests.
+- `npm run test:all` passes before tagging or shipping.
 
 See [AGENTS.md](./AGENTS.md) for architecture, extension, and validation rules.
