@@ -4,6 +4,7 @@ import { formatDatasetNotes } from "./app/datasetPanel";
 import { formatDriftPartsPerMillion } from "./app/diagnosticsPanel";
 import { requireElement } from "./app/dom";
 import {
+  calculateCenterOfMass,
   DiagnosticsHistory,
   sparkline,
 } from "./app/diagnosticsHistory";
@@ -209,6 +210,7 @@ const cometsInput = requireElement<HTMLInputElement>("comets-toggle");
 const cometPathsInput = requireElement<HTMLInputElement>("comet-paths");
 const cometTailsInput = requireElement<HTMLInputElement>("comet-tails");
 const moonsInput = requireElement<HTMLInputElement>("moons-toggle");
+const barycenterInput = requireElement<HTMLInputElement>("barycenter-toggle");
 const labelsInput = requireElement<HTMLInputElement>("labels-toggle");
 const distanceScaleInput = requireElement<HTMLInputElement>("distance-scale");
 const distanceScaleValue = requireElement<HTMLOutputElement>("distance-scale-value");
@@ -418,6 +420,7 @@ function applyLayerSettingsToRenderer(target = renderer): void {
   target.setCometPathsVisible(cometPathsInput.checked);
   target.setCometTailsVisible(cometTailsInput.checked);
   target.setMoonsVisible(moonsInput.checked);
+  target.setBarycenterVisible(barycenterInput.checked);
   target.setLabelsVisible(labelsInput.checked);
 }
 
@@ -695,6 +698,7 @@ function switchScenario(id: string): void {
   renderer.setCometPathsVisible(cometPathsInput.checked);
   renderer.setCometTailsVisible(cometTailsInput.checked);
   renderer.setMoonsVisible(moonsInput.checked);
+  renderer.setBarycenterVisible(barycenterInput.checked);
   renderer.setLabelsVisible(labelsInput.checked);
   resetDiagnostics();
   updateDatasetPanel();
@@ -1081,6 +1085,9 @@ cometTailsInput.addEventListener("change", () =>
   renderer.setCometTailsVisible(cometTailsInput.checked),
 );
 moonsInput.addEventListener("change", () => renderer.setMoonsVisible(moonsInput.checked));
+barycenterInput.addEventListener("change", () =>
+  renderer.setBarycenterVisible(barycenterInput.checked),
+);
 labelsInput.addEventListener("change", () => renderer.setLabelsVisible(labelsInput.checked));
 distanceScaleInput.addEventListener("input", () => {
   const scale = Number(distanceScaleInput.value);
@@ -1151,6 +1158,7 @@ function frame(now: number): void {
     });
   }
   renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
+  renderer.updateBarycenter(calculateCenterOfMass(simulation.bodies));
   renderer.render();
   const renderStats = renderer.getStats();
   const renderMs = performance.now() - renderStartMs;
@@ -1179,6 +1187,7 @@ applyLayerSettingsToRenderer();
 renderer.selectBody(selectedBodyId);
 renderer.focusBody(selectedBodyId, false);
 renderer.update(simulation.bodies, orbitalStates, 0);
+renderer.updateBarycenter(calculateCenterOfMass(simulation.bodies));
 renderSelectedBody(true);
 renderLaunchTargets();
 renderNavigator();

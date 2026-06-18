@@ -21,6 +21,7 @@ import {
   scaleDistanceForDisplay,
   type DistanceScaleConfig,
 } from "./distanceScale";
+import { calculateBarycenterScenePosition } from "./barycenterOverlay";
 import { shouldShowCometVisual } from "./cometVisibility";
 import { shouldShowMoon } from "./moonVisibility";
 import { resolveViewFrameOrigin, type ViewFrame } from "./viewFrame";
@@ -119,6 +120,8 @@ export class SolarSystemRenderer {
   private readonly bodyViews = new Map<string, BodyView>();
   private readonly orbitalViews = new Map<string, OrbitalBodyView>();
   private readonly beltViews = new Map<string, BeltView>();
+  private readonly barycenterMesh: THREE.Mesh;
+  private readonly barycenterLabel: HTMLDivElement;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly resizeObserver: ResizeObserver;
@@ -129,6 +132,7 @@ export class SolarSystemRenderer {
   private cometTailsVisible = true;
   private cometsVisible = true;
   private moonsVisible = true;
+  private barycenterVisible = true;
   private distanceScale: DistanceScaleConfig = DEFAULT_DISTANCE_SCALE;
   private viewFrame: ViewFrame = "barycentric";
   private viewFrameOriginM = { x: 0, y: 0, z: 0 };
@@ -175,6 +179,8 @@ export class SolarSystemRenderer {
     this.controls.maxZoom = 300;
 
     this.addBackground();
+    this.barycenterMesh = this.createBarycenterMesh();
+    this.barycenterLabel = this.createLabel("Barycenter");
     this.createBodyViews(bodies);
     this.createOrbitalViews(orbitalBodies);
     this.createBeltViews(belts);
@@ -290,6 +296,7 @@ export class SolarSystemRenderer {
 
   getStats(): RendererStats {
     let visibleObjectCount = 0;
+    if (this.barycenterMesh.visible) visibleObjectCount += 1;
     for (const view of this.bodyViews.values()) {
       if (view.mesh.visible) visibleObjectCount += 1;
       if (view.trail.visible) visibleObjectCount += 1;
@@ -457,6 +464,21 @@ export class SolarSystemRenderer {
   setLabelsVisible(visible: boolean): void {
     this.labelsVisible = visible;
     this.labelsContainer.style.display = visible ? "block" : "none";
+  }
+
+  setBarycenterVisible(visible: boolean): void {
+    this.barycenterVisible = visible;
+    this.barycenterMesh.visible = visible;
+    if (!visible) this.barycenterLabel.style.display = "none";
+  }
+
+  updateBarycenter(positionM: { readonly x: number; readonly y: number; readonly z: number }): void {
+    const scenePosition = calculateBarycenterScenePosition({
+      barycenterM: positionM,
+      frameOriginM: this.viewFrameOriginM,
+      distanceScale: this.distanceScale,
+    });
+    this.barycenterMesh.position.set(scenePosition.x, scenePosition.y, scenePosition.z);
   }
 
   setDistanceScale(scaleFactor: number): void {
@@ -1110,6 +1132,22 @@ export class SolarSystemRenderer {
     return line;
   }
 
+  private createBarycenterMesh(): THREE.Mesh {
+    const mesh = new THREE.Mesh(
+      new THREE.RingGeometry(0.055, 0.095, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xf0f5ff,
+        transparent: true,
+        opacity: 0.78,
+        side: THREE.DoubleSide,
+      }),
+    );
+    mesh.userData.renderRadiusPx = 5;
+    mesh.renderOrder = 5;
+    this.scene.add(mesh);
+    return mesh;
+  }
+
   private disposeObject(object: THREE.Object3D): void {
     object.traverse((child) => {
       if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
@@ -1243,8 +1281,13 @@ export class SolarSystemRenderer {
     const entries = [
       ...[...this.bodyViews.values()].map((view) => ({ mesh: view.mesh, label: view.label })),
       ...[...this.orbitalViews.values()].map((view) => ({ mesh: view.mesh, label: view.label })),
+      { mesh: this.barycenterMesh, label: this.barycenterLabel },
     ];
     for (const view of entries) {
+      if (view.mesh === this.barycenterMesh && !this.barycenterVisible) {
+        view.label.style.display = "none";
+        continue;
+      }
       if (!view.mesh.visible || view.mesh.userData.labelHiddenByDeclutter === true) {
         view.label.style.display = "none";
         continue;
