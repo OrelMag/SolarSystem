@@ -43,6 +43,10 @@ import {
 } from "./app/scenarios";
 import { buildSelectedBodyDetail } from "./app/selectedBody";
 import {
+  shouldRefreshSelectedBodyDetail,
+  type SelectedBodyRefreshSnapshot,
+} from "./app/selectedBodyRefresh";
+import {
   loadVisualSettings,
   resetAllBodyScaleOverrides,
   resetBodyScaleOverride,
@@ -88,6 +92,7 @@ import {
 const MINIMUM_DISTANCE_M = 1_000;
 const COLLISION_POLICY = createMinimumDistanceCollisionPolicy(MINIMUM_DISTANCE_M);
 const DIAGNOSTIC_INTERVAL_SECONDS = 30 * DAY_SECONDS;
+const SELECTED_BODY_REFRESH_INTERVAL_MS = 1_000;
 const ENERGY_WARNING_DRIFT = 5e-5;
 const ANGULAR_WARNING_DRIFT = 5e-5;
 
@@ -257,6 +262,7 @@ let diagnosticsHistory = new DiagnosticsHistory();
 let namesById = buildNamesById();
 let navigatorEntries = createNavigatorEntries(simulation.bodies, orbitalDefinitions, namesById);
 let selectedBodyId = currentScenario.defaultTargetId;
+let selectedBodyRefreshSnapshot: SelectedBodyRefreshSnapshot | undefined;
 let launchMission: LaunchMissionState | undefined;
 let launchInjectionSpeedMps: number | undefined;
 let filteredNavigatorEntries: NavigatorEntry[] = [];
@@ -421,7 +427,21 @@ function updateManualScaleControls(): void {
   bodyScaleValue.value = `${selectedScale.toFixed(2)}x`;
 }
 
-function renderSelectedBody(): void {
+function renderSelectedBody(force = false): void {
+  const nowMs = performance.now();
+  if (
+    !shouldRefreshSelectedBodyDetail({
+      force,
+      bodyId: selectedBodyId,
+      elapsedSeconds: simulation.elapsedSeconds,
+      nowMs,
+      minimumIntervalMs: SELECTED_BODY_REFRESH_INTERVAL_MS,
+      previous: selectedBodyRefreshSnapshot,
+    })
+  ) {
+    return;
+  }
+
   const accelerations = calculateAccelerations(simulation.bodies, COLLISION_POLICY);
   const accelerationsById = new Map(
     simulation.bodies.map((body, index) => [body.id, accelerations[index] ?? { x: 0, y: 0, z: 0 }] as const),
@@ -434,6 +454,11 @@ function renderSelectedBody(): void {
     accelerationsById,
   });
   if (!detail) return;
+  selectedBodyRefreshSnapshot = {
+    bodyId: selectedBodyId,
+    elapsedSeconds: simulation.elapsedSeconds,
+    refreshedAtMs: nowMs,
+  };
   selectedBodyElement.replaceChildren();
   const title = document.createElement("strong");
   title.textContent = detail.title;
@@ -460,7 +485,7 @@ function selectAndFollow(id: string): void {
   renderer.focusBody(id, true);
   renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
   renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
-  renderSelectedBody();
+  renderSelectedBody(true);
   updateManualScaleControls();
   renderNavigator();
   updateGifExportHint();
@@ -532,7 +557,7 @@ function clearActiveSpacecraft(selectFallback: boolean): void {
   }
   resetDiagnostics();
   refreshCatalog();
-  renderSelectedBody();
+  renderSelectedBody(true);
   updateManualScaleControls();
   renderNavigator();
   updateGifExportHint();
@@ -623,7 +648,7 @@ function resetCurrentScenario(): void {
   renderer.stopFollowing();
   renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
   renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
-  renderSelectedBody();
+  renderSelectedBody(true);
   updateManualScaleControls();
   renderNavigator();
   updateGifExportHint();
@@ -667,7 +692,7 @@ function switchScenario(id: string): void {
   renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
   renderer.selectBody(selectedBodyId);
   renderer.focusBody(selectedBodyId, false);
-  renderSelectedBody();
+  renderSelectedBody(true);
   updateManualScaleControls();
   renderNavigator();
   updateGifExportHint();
@@ -1123,7 +1148,7 @@ applyLayerSettingsToRenderer();
 renderer.selectBody(selectedBodyId);
 renderer.focusBody(selectedBodyId, false);
 renderer.update(simulation.bodies, orbitalStates, 0);
-renderSelectedBody();
+renderSelectedBody(true);
 renderLaunchTargets();
 renderNavigator();
 updateGifExportHint();
