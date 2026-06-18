@@ -52,6 +52,7 @@ import {
   relativeDrift,
   type ConservedQuantities,
 } from "./physics/diagnostics";
+import { createMinimumDistanceCollisionPolicy } from "./physics/collisionPolicy";
 import { DAY_SECONDS, J2000_ISO } from "./physics/constants";
 import {
   propagateHierarchicalBodies,
@@ -79,6 +80,7 @@ import {
 } from "./ui/navigator";
 
 const MINIMUM_DISTANCE_M = 1_000;
+const COLLISION_POLICY = createMinimumDistanceCollisionPolicy(MINIMUM_DISTANCE_M);
 const DIAGNOSTIC_INTERVAL_SECONDS = 30 * DAY_SECONDS;
 const ENERGY_WARNING_DRIFT = 5e-5;
 const ANGULAR_WARNING_DRIFT = 5e-5;
@@ -116,7 +118,7 @@ function createSimulation(scenario: ScenarioDefinition): NBodySimulation {
   );
   return new NBodySimulation(bodies, {
     fixedTimestepSeconds: DEFAULT_FIXED_TIMESTEP_SECONDS,
-    minimumDistanceM: MINIMUM_DISTANCE_M,
+    collisionPolicy: COLLISION_POLICY,
   });
 }
 
@@ -444,7 +446,7 @@ function updateManualScaleControls(): void {
 }
 
 function renderSelectedBody(): void {
-  const accelerations = calculateAccelerations(simulation.bodies, MINIMUM_DISTANCE_M);
+  const accelerations = calculateAccelerations(simulation.bodies, COLLISION_POLICY);
   const accelerationsById = new Map(
     simulation.bodies.map((body, index) => [body.id, accelerations[index] ?? { x: 0, y: 0, z: 0 }] as const),
   );
@@ -828,7 +830,7 @@ async function exportCurrentViewGif(): Promise<void> {
 
   const exportSimulation = NBodySimulation.fromSnapshot(simulation.snapshot, {
     fixedTimestepSeconds: simulation.fixedTimestepSeconds,
-    minimumDistanceM: MINIMUM_DISTANCE_M,
+    collisionPolicy: COLLISION_POLICY,
   });
   const stage = createExportStage(options.outputWidthPx, options.outputHeightPx);
   const exportRenderer = new SolarSystemRenderer(

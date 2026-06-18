@@ -1,17 +1,21 @@
 import type { MutableBodyState } from "../domain/types";
 import { vector, type Vector3 } from "../domain/vector";
+import {
+  DEFAULT_COLLISION_POLICY,
+  SimulationCollisionError,
+  validateCollisionPolicy,
+  type CollisionPolicy,
+} from "./collisionPolicy";
 import { GRAVITATIONAL_CONSTANT } from "./constants";
 
 export function calculateAccelerations(
   bodies: readonly Readonly<MutableBodyState>[],
-  minimumDistanceM = 1,
+  collisionPolicy: CollisionPolicy = DEFAULT_COLLISION_POLICY,
 ): Vector3[] {
-  if (!(minimumDistanceM > 0) || !Number.isFinite(minimumDistanceM)) {
-    throw new Error("Minimum interaction distance must be finite and greater than zero.");
-  }
+  validateCollisionPolicy(collisionPolicy);
 
   const acceleration = bodies.map(() => ({ x: 0, y: 0, z: 0 }));
-  const minimumDistanceSquared = minimumDistanceM ** 2;
+  const minimumDistanceSquared = collisionPolicy.minimumDistanceM ** 2;
 
   for (let first = 0; first < bodies.length; first += 1) {
     const bodyA = bodies[first];
@@ -26,7 +30,12 @@ export function calculateAccelerations(
       const dz = bodyB.positionM.z - bodyA.positionM.z;
       const distanceSquared = dx * dx + dy * dy + dz * dz;
       if (distanceSquared < minimumDistanceSquared) {
-        throw new Error(`Bodies "${bodyA.id}" and "${bodyB.id}" are too close to integrate.`);
+        throw new SimulationCollisionError({
+          bodyAId: bodyA.id,
+          bodyBId: bodyB.id,
+          distanceM: Math.sqrt(distanceSquared),
+          minimumDistanceM: collisionPolicy.minimumDistanceM,
+        });
       }
 
       const inverseDistance = 1 / Math.sqrt(distanceSquared);

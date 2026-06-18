@@ -1,8 +1,9 @@
 import type { CelestialBody } from "../domain/types";
 import { magnitude, vector } from "../domain/vector";
+import { DEFAULT_COLLISION_POLICY, type CollisionPolicy } from "./collisionPolicy";
 import { calculateConservedQuantities, relativeDrift } from "./diagnostics";
 import { GRAVITATIONAL_CONSTANT, JULIAN_YEAR_SECONDS } from "./constants";
-import { NBodySimulation, type SimulationConfig } from "./simulation";
+import { NBodySimulation } from "./simulation";
 
 export interface ConservationValidationCase {
   readonly id: "one-year" | "ten-years" | "one-hundred-years";
@@ -77,11 +78,11 @@ export function createConservationValidationBodies(): CelestialBody[] {
 
 export function runConservationValidation(
   validationCase: ConservationValidationCase,
-  config: Pick<SimulationConfig, "minimumDistanceM"> = { minimumDistanceM: 1 },
+  config: { readonly collisionPolicy?: CollisionPolicy } = {},
 ): ConservationValidationResult {
   const simulation = new NBodySimulation(createConservationValidationBodies(), {
     fixedTimestepSeconds: validationCase.fixedTimestepSeconds,
-    minimumDistanceM: config.minimumDistanceM,
+    collisionPolicy: config.collisionPolicy ?? DEFAULT_COLLISION_POLICY,
   });
   const initial = calculateConservedQuantities(simulation.bodies);
   const stepCount = Math.round(

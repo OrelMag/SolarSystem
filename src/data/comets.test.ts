@@ -4,9 +4,10 @@ import {
   J2000_JULIAN_DAY,
   propagateEllipticOrbit,
 } from "../physics/orbitalMechanics";
+import { createMinimumDistanceCollisionPolicy } from "../physics/collisionPolicy";
+import { NBodySimulation } from "../physics/simulation";
 import { COMETS } from "./comets";
 import { createSolarSystem } from "./solarSystem";
-import { NBodySimulation } from "../physics/simulation";
 
 describe("comet catalog", () => {
   it("contains the curated JPL objects with plausible perihelia and aphelia", () => {
@@ -31,11 +32,11 @@ describe("comet catalog", () => {
     const bodies = createSolarSystem();
     const baseline = new NBodySimulation(bodies, {
       fixedTimestepSeconds: 10_800,
-      minimumDistanceM: 1_000,
+      collisionPolicy: createMinimumDistanceCollisionPolicy(1_000),
     });
     const comparison = new NBodySimulation(bodies, {
       fixedTimestepSeconds: 10_800,
-      minimumDistanceM: 1_000,
+      collisionPolicy: createMinimumDistanceCollisionPolicy(1_000),
     });
     const sunMassKg = bodies[0]!.massKg;
     for (let index = 0; index < 100; index += 1) {

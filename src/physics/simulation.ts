@@ -1,10 +1,15 @@
 import type { CelestialBody, MutableBodyState, SimulationSnapshot } from "../domain/types";
 import { add, isFiniteVector, scale, type Vector3 } from "../domain/vector";
+import {
+  DEFAULT_COLLISION_POLICY,
+  validateCollisionPolicy,
+  type CollisionPolicy,
+} from "./collisionPolicy";
 import { calculateAccelerations } from "./gravity";
 
 export interface SimulationConfig {
   readonly fixedTimestepSeconds: number;
-  readonly minimumDistanceM: number;
+  readonly collisionPolicy?: CollisionPolicy;
 }
 
 function validateBodies(bodies: readonly CelestialBody[]): void {
@@ -45,7 +50,7 @@ function cloneBodies(bodies: readonly CelestialBody[]): MutableBodyState[] {
 
 export class NBodySimulation {
   readonly fixedTimestepSeconds: number;
-  private readonly minimumDistanceM: number;
+  private readonly collisionPolicy: CollisionPolicy;
   private readonly initialBodies: readonly CelestialBody[];
   private readonly runtimeBodyIds = new Set<string>();
   private state: MutableBodyState[];
@@ -56,6 +61,8 @@ export class NBodySimulation {
     if (!(config.fixedTimestepSeconds > 0) || !Number.isFinite(config.fixedTimestepSeconds)) {
       throw new Error("Fixed timestep must be finite and greater than zero.");
     }
+    this.collisionPolicy = config.collisionPolicy ?? DEFAULT_COLLISION_POLICY;
+    validateCollisionPolicy(this.collisionPolicy);
     this.initialBodies = bodies.map((body) => ({
       ...body,
       positionM: { ...body.positionM },
@@ -64,7 +71,6 @@ export class NBodySimulation {
     }));
     this.state = cloneBodies(this.initialBodies);
     this.fixedTimestepSeconds = config.fixedTimestepSeconds;
-    this.minimumDistanceM = config.minimumDistanceM;
   }
 
   static fromSnapshot(snapshot: SimulationSnapshot, config: SimulationConfig): NBodySimulation {
@@ -140,7 +146,7 @@ export class NBodySimulation {
 
   private integrateOneStep(): void {
     const dt = this.fixedTimestepSeconds;
-    const initialAcceleration = calculateAccelerations(this.state, this.minimumDistanceM);
+    const initialAcceleration = calculateAccelerations(this.state, this.collisionPolicy);
 
     for (let index = 0; index < this.state.length; index += 1) {
       const body = this.state[index];
@@ -152,7 +158,7 @@ export class NBodySimulation {
       );
     }
 
-    const finalAcceleration = calculateAccelerations(this.state, this.minimumDistanceM);
+    const finalAcceleration = calculateAccelerations(this.state, this.collisionPolicy);
     for (let index = 0; index < this.state.length; index += 1) {
       const body = this.state[index];
       const before = initialAcceleration[index];

@@ -6,6 +6,7 @@ import {
   calculateSpacecraftGuidance,
   DEFAULT_SPACECRAFT_GUIDANCE,
 } from "./guidance";
+import { createMinimumDistanceCollisionPolicy } from "./collisionPolicy";
 import {
   ACTIVE_SPACECRAFT_ID,
   SPACECRAFT_LAUNCH_ALTITUDE_M,
@@ -117,7 +118,7 @@ function simulateGuidedLaunch(input: {
   const launch = createEarthLaunch({ bodies: input.bodies, target });
   const simulation = new NBodySimulation(input.bodies, {
     fixedTimestepSeconds: 300,
-    minimumDistanceM: 1_000,
+    collisionPolicy: createMinimumDistanceCollisionPolicy(1_000),
   });
   simulation.addRuntimeBody(launch.spacecraft);
   let spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);

@@ -3,6 +3,10 @@ import type { CelestialBody } from "../domain/types";
 import { magnitude, vector } from "../domain/vector";
 import { calculateConservedQuantities, relativeDrift } from "./diagnostics";
 import { GRAVITATIONAL_CONSTANT } from "./constants";
+import {
+  createMinimumDistanceCollisionPolicy,
+  SimulationCollisionError,
+} from "./collisionPolicy";
 import { NBodySimulation } from "./simulation";
 
 function createCircularBinary(): CelestialBody[] {
@@ -38,7 +42,6 @@ describe("NBodySimulation", () => {
   it("advances time only by complete fixed steps", () => {
     const simulation = new NBodySimulation(createCircularBinary(), {
       fixedTimestepSeconds: 10,
-      minimumDistanceM: 1,
     });
     simulation.step(3);
     expect(simulation.elapsedSeconds).toBe(30);
@@ -47,7 +50,6 @@ describe("NBodySimulation", () => {
   it("restores the exact initial state on reset", () => {
     const simulation = new NBodySimulation(createCircularBinary(), {
       fixedTimestepSeconds: 10,
-      minimumDistanceM: 1,
     });
     const initial = simulation.snapshot;
     simulation.step(20);
@@ -58,12 +60,10 @@ describe("NBodySimulation", () => {
   it("clones a snapshot without sharing mutable state", () => {
     const simulation = new NBodySimulation(createCircularBinary(), {
       fixedTimestepSeconds: 10,
-      minimumDistanceM: 1,
     });
     simulation.step(3);
     const clone = NBodySimulation.fromSnapshot(simulation.snapshot, {
       fixedTimestepSeconds: 10,
-      minimumDistanceM: 1,
     });
 
     expect(clone.elapsedSeconds).toBe(30);
@@ -78,7 +78,6 @@ describe("NBodySimulation", () => {
   it("keeps a circular orbit and conserved quantities bounded", () => {
     const simulation = new NBodySimulation(createCircularBinary(), {
       fixedTimestepSeconds: 200,
-      minimumDistanceM: 1,
     });
     const initial = calculateConservedQuantities(simulation.bodies);
     const initialRadius = magnitude(simulation.bodies[1]?.positionM ?? vector());
@@ -104,7 +103,6 @@ describe("NBodySimulation", () => {
       () =>
         new NBodySimulation([bodies[0]!, duplicate], {
           fixedTimestepSeconds: 1,
-          minimumDistanceM: 1,
         }),
     ).toThrow(/unique/);
   });
@@ -112,7 +110,6 @@ describe("NBodySimulation", () => {
   it("adds and removes validated runtime bodies without changing the reset baseline", () => {
     const simulation = new NBodySimulation(createCircularBinary(), {
       fixedTimestepSeconds: 10,
-      minimumDistanceM: 1,
     });
     const spacecraft: CelestialBody = {
       id: "spacecraft",
@@ -144,7 +141,6 @@ describe("NBodySimulation", () => {
   it("validates runtime body state and velocity impulses", () => {
     const simulation = new NBodySimulation(createCircularBinary(), {
       fixedTimestepSeconds: 10,
-      minimumDistanceM: 1,
     });
 
     expect(() =>
@@ -176,5 +172,34 @@ describe("NBodySimulation", () => {
     expect(() =>
       simulation.applyRuntimeBodyVelocityDelta("spacecraft", vector(Number.NaN, 0, 0)),
     ).toThrow(/finite/);
+  });
+
+  it("validates explicit collision policies", () => {
+    expect(
+      () =>
+        new NBodySimulation(createCircularBinary(), {
+          fixedTimestepSeconds: 10,
+          collisionPolicy: createMinimumDistanceCollisionPolicy(0),
+        }),
+    ).toThrow(/minimum distance/);
+  });
+
+  it("throws structured close-approach errors", () => {
+    const simulation = new NBodySimulation(createCircularBinary(), {
+      fixedTimestepSeconds: 10,
+      collisionPolicy: createMinimumDistanceCollisionPolicy(2e9),
+    });
+
+    expect(() => simulation.step()).toThrow(SimulationCollisionError);
+    try {
+      simulation.step();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SimulationCollisionError);
+      const collision = error as SimulationCollisionError;
+      expect(collision.bodyAId).toBe("star");
+      expect(collision.bodyBId).toBe("planet");
+      expect(collision.distanceM).toBeCloseTo(1e9);
+      expect(collision.minimumDistanceM).toBe(2e9);
+    }
   });
 });
