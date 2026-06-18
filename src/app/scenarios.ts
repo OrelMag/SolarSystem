@@ -5,6 +5,10 @@ import {
   PHYSICAL_ORBITAL_BODIES,
   PHYSICAL_SOLAR_DATASET_METADATA,
 } from "../data/physicalSolarSystem";
+import {
+  createHorizonsSolarSystem,
+  HORIZONS_SOLAR_DATASET_METADATA,
+} from "../data/horizonsSolarSystem";
 import type {
   HierarchicalOrbitalBody,
   OrbitalParticle,
@@ -15,10 +19,13 @@ import { scale, vector } from "../domain/vector";
 import { ASTRONOMICAL_UNIT_M, DAY_SECONDS } from "../physics/constants";
 
 export interface ScenarioMetadata {
+  readonly datasetId: "jpl-approximate-j2000" | "jpl-horizons-cartesian-j2000" | "analytic-two-body-validation";
   readonly source: string;
   readonly sourceUrl: string;
   readonly epoch: string;
   readonly referenceFrame: string;
+  readonly originalUnits: string;
+  readonly conversionApplied: string;
   readonly notes: string;
 }
 
@@ -28,7 +35,12 @@ export interface ScenarioBelt {
 }
 
 export interface ScenarioDefinition {
-  readonly id: "full-solar-system" | "inner-planets" | "outer-planets" | "two-body-validation";
+  readonly id:
+    | "full-solar-system"
+    | "horizons-solar-system"
+    | "inner-planets"
+    | "outer-planets"
+    | "two-body-validation";
   readonly label: string;
   readonly description: string;
   readonly defaultTargetId: string;
@@ -87,10 +99,13 @@ const filterDisplayOnlyBodies = (
 };
 
 const solarMetadata: ScenarioMetadata = {
+  datasetId: PHYSICAL_SOLAR_DATASET_METADATA.datasetId,
   source: PHYSICAL_SOLAR_DATASET_METADATA.source,
   sourceUrl: PHYSICAL_SOLAR_DATASET_METADATA.sourceUrl,
   epoch: PHYSICAL_SOLAR_DATASET_METADATA.epoch,
   referenceFrame: PHYSICAL_SOLAR_DATASET_METADATA.referenceFrame,
+  originalUnits: PHYSICAL_SOLAR_DATASET_METADATA.originalUnits,
+  conversionApplied: PHYSICAL_SOLAR_DATASET_METADATA.conversionApplied,
   notes: PHYSICAL_SOLAR_DATASET_METADATA.notes,
 };
 
@@ -134,6 +149,26 @@ export const SCENARIOS: readonly ScenarioDefinition[] = [
     physicalOrbitalBodies: PHYSICAL_ORBITAL_BODIES,
     displayOnlyOrbitalBodies: COMETS,
     belts: allBelts(),
+  },
+  {
+    id: "horizons-solar-system",
+    label: "Horizons Planets",
+    description: "Sun and eight planets from JPL/Horizons Cartesian state vectors.",
+    defaultTargetId: "sun",
+    metadata: {
+      datasetId: HORIZONS_SOLAR_DATASET_METADATA.datasetId,
+      source: HORIZONS_SOLAR_DATASET_METADATA.source,
+      sourceUrl: HORIZONS_SOLAR_DATASET_METADATA.sourceUrl,
+      epoch: HORIZONS_SOLAR_DATASET_METADATA.epoch,
+      referenceFrame: HORIZONS_SOLAR_DATASET_METADATA.referenceFrame,
+      originalUnits: HORIZONS_SOLAR_DATASET_METADATA.originalUnits,
+      conversionApplied: HORIZONS_SOLAR_DATASET_METADATA.conversionApplied,
+      notes: HORIZONS_SOLAR_DATASET_METADATA.notes,
+    },
+    createBodies: createHorizonsSolarSystem,
+    physicalOrbitalBodies: [],
+    displayOnlyOrbitalBodies: [],
+    belts: [],
   },
   {
     id: "inner-planets",
@@ -191,10 +226,13 @@ export const SCENARIOS: readonly ScenarioDefinition[] = [
     description: "A deterministic circular-orbit scenario for checking conservation behavior.",
     defaultTargetId: "validation-orbiter",
     metadata: {
+      datasetId: "analytic-two-body-validation",
       source: "Analytic circular two-body fixture",
       sourceUrl: "local deterministic fixture",
       epoch: "J2000.0 (2000-01-01T12:00:00Z)",
       referenceFrame: "Barycentric Cartesian SI fixture",
+      originalUnits: "SI fixture",
+      conversionApplied: "None",
       notes: `One 1 AU near-circular orbit with velocity derived from GM/r; intended for diagnostics, not astronomy.`,
     },
     createBodies: createTwoBodyValidation,

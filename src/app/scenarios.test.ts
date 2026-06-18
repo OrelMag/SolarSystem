@@ -11,6 +11,9 @@ describe("scenarios", () => {
       expect(scenario.metadata.source).toBeTruthy();
       expect(scenario.metadata.epoch).toBeTruthy();
       expect(scenario.metadata.referenceFrame).toBeTruthy();
+      expect(scenario.metadata.datasetId).toBeTruthy();
+      expect(scenario.metadata.originalUnits).toBeTruthy();
+      expect(scenario.metadata.conversionApplied).toBeTruthy();
     }
   });
 

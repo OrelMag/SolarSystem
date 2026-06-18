@@ -529,7 +529,10 @@ function updateDatasetPanel(): void {
   datasetSourceElement.textContent = currentScenario.metadata.source;
   datasetEpochElement.textContent = currentScenario.metadata.epoch;
   datasetFrameElement.textContent = currentScenario.metadata.referenceFrame;
-  datasetNotesElement.textContent = `${currentScenario.description} ${currentScenario.metadata.notes}`;
+  datasetNotesElement.textContent =
+    `${currentScenario.description} ${currentScenario.metadata.notes} ` +
+    `Units: ${currentScenario.metadata.originalUnits}. ` +
+    `Conversion: ${currentScenario.metadata.conversionApplied}`;
 }
 
 function resetDiagnostics(): void {
