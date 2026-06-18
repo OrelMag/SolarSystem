@@ -52,6 +52,12 @@ export interface SolarSystemRendererOptions {
   readonly pixelRatio?: number;
 }
 
+export interface RendererStats {
+  readonly bodyViewCount: number;
+  readonly orbitalViewCount: number;
+  readonly visibleObjectCount: number;
+}
+
 export interface RendererViewSnapshot {
   readonly cameraPosition: {
     readonly x: number;
@@ -280,6 +286,28 @@ export class SolarSystemRenderer {
     this.updateDeclutterVisibility();
     this.renderer.render(this.scene, this.camera);
     this.updateLabels();
+  }
+
+  getStats(): RendererStats {
+    let visibleObjectCount = 0;
+    for (const view of this.bodyViews.values()) {
+      if (view.mesh.visible) visibleObjectCount += 1;
+      if (view.trail.visible) visibleObjectCount += 1;
+      if (view.orbit.visible) visibleObjectCount += 1;
+    }
+    for (const view of this.orbitalViews.values()) {
+      if (view.mesh.visible) visibleObjectCount += 1;
+      if (view.orbit.visible) visibleObjectCount += 1;
+      if (view.tail?.visible) visibleObjectCount += 1;
+    }
+    for (const view of this.beltViews.values()) {
+      if (view.points.visible) visibleObjectCount += 1;
+    }
+    return {
+      bodyViewCount: this.bodyViews.size,
+      orbitalViewCount: this.orbitalViews.size,
+      visibleObjectCount,
+    };
   }
 
   getViewSnapshot(): RendererViewSnapshot {

@@ -26,6 +26,10 @@ import {
   formatGifExportProgress,
   yieldToBrowser,
 } from "./app/gifExportController";
+import {
+  formatMilliseconds,
+  type PerformanceTelemetry,
+} from "./app/performanceTelemetry";
 import { calculatePhysicsStepBudget } from "./app/simulationClock";
 import {
   formatDuration,
@@ -217,6 +221,11 @@ const stepElement = requireElement("step");
 const timeScaleElement = requireElement("time-scale");
 const maxStepsElement = requireElement("max-steps");
 const catchupElement = requireElement("catchup");
+const physicsTimeElement = requireElement("physics-time");
+const renderTimeElement = requireElement("render-time");
+const diagnosticsTimeElement = requireElement("diagnostics-time");
+const bodyCountElement = requireElement("body-count");
+const visibleObjectsElement = requireElement("visible-objects");
 const energyDriftElement = requireElement("energy-drift");
 const energySparkElement = requireElement("energy-spark");
 const momentumDriftElement = requireElement("momentum-drift");
@@ -966,6 +975,14 @@ function updateTelemetry(stepsThisFrame: number, clamped: boolean): void {
   diagnosticsSection?.classList.toggle("warning", status.warning);
 }
 
+function updatePerformanceTelemetry(input: PerformanceTelemetry): void {
+  physicsTimeElement.textContent = formatMilliseconds(input.physicsMs);
+  renderTimeElement.textContent = formatMilliseconds(input.renderMs);
+  diagnosticsTimeElement.textContent = formatMilliseconds(input.diagnosticsMs);
+  bodyCountElement.textContent = String(input.bodyCount);
+  visibleObjectsElement.textContent = String(input.visibleObjectCount);
+}
+
 toggleButton.addEventListener("click", () => {
   running = !running;
   if (running && speedSelect.value === "paused") {
@@ -1103,7 +1120,9 @@ function frame(now: number): void {
   lastFrameTime = now;
   let stepsThisFrame = 0;
   let clamped = false;
+  let physicsMs = 0;
   if (running && timeScaleSeconds > 0) {
+    const physicsStartMs = performance.now();
     maxStepsPerFrame = calculateActiveStepBudget();
     accumulatorSeconds += realDeltaSeconds * timeScaleSeconds;
     while (
@@ -1119,7 +1138,9 @@ function frame(now: number): void {
       accumulatorSeconds = Math.min(accumulatorSeconds, simulation.fixedTimestepSeconds);
       clamped = true;
     }
+    physicsMs = performance.now() - physicsStartMs;
   }
+  const renderStartMs = performance.now();
   orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
   if (launchMission) {
     launchMission = updateLaunchMissionState({
@@ -1131,9 +1152,19 @@ function frame(now: number): void {
   }
   renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
   renderer.render();
+  const renderStats = renderer.getStats();
+  const renderMs = performance.now() - renderStartMs;
+  const diagnosticsStartMs = performance.now();
   updateTelemetry(stepsThisFrame, clamped);
   renderLaunchPanel();
   renderSelectedBody();
+  updatePerformanceTelemetry({
+    physicsMs,
+    renderMs,
+    diagnosticsMs: performance.now() - diagnosticsStartMs,
+    bodyCount: simulation.bodies.length,
+    visibleObjectCount: renderStats.visibleObjectCount,
+  });
   requestAnimationFrame(frame);
 }
 
