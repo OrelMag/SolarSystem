@@ -29,3 +29,26 @@ test("loads the simulation and exercises core controls", async ({ page }) => {
   await page.locator("#reset").click();
   await expect(page.locator("#selected-body")).toContainText("Sun");
 });
+
+test("keeps mobile controls reachable with collapsed secondary sections", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto("/");
+
+  await expect(page.locator("#scene canvas")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Simulation" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(page.getByRole("button", { name: "Telemetry" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+
+  await page.getByRole("button", { name: "Telemetry" }).click();
+  await expect(page.getByRole("button", { name: "Telemetry" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(page.locator("#physics-time")).toBeVisible();
+  await expect(page.locator("#visible-objects")).toBeVisible();
+});

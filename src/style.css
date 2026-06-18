@@ -83,9 +83,9 @@ dt,
 
 .brand h1 {
   margin: 5px 0 2px;
-  font-size: clamp(26px, 3vw, 42px);
+  font-size: 38px;
   font-weight: 500;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
 }
 
 .brand p {
@@ -513,14 +513,57 @@ footer {
 
   #app {
     grid-template-columns: 1fr;
-    grid-template-rows: 65vh auto;
+    grid-template-rows: minmax(380px, 58vh) auto;
     height: auto;
     min-height: 100vh;
   }
 
   .panel {
+    position: relative;
+    margin-top: -8px;
     border-top: 1px solid #1b202b;
     border-left: 0;
+    border-radius: 8px 8px 0 0;
+  }
+
+  .control-section {
+    padding: 18px 16px;
+  }
+
+  .section-heading {
+    margin-bottom: 14px;
+  }
+
+  .button-row,
+  .view-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  button,
+  select,
+  input[type="number"],
+  .search-input {
+    min-width: 0;
+    font-size: 12px;
+  }
+
+  .export-size-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .export-size-controls label {
+    justify-content: flex-start;
+  }
+
+  dl div,
+  .detail-grid div {
+    display: grid;
+    grid-template-columns: minmax(88px, 0.7fr) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  dd {
+    overflow-wrap: anywhere;
   }
 
   .brand {
@@ -528,7 +571,13 @@ footer {
     left: 20px;
   }
 
+  .brand h1 {
+    font-size: 28px;
+  }
+
   .hint {
     left: 20px;
+    right: 20px;
+    line-height: 1.5;
   }
 }
