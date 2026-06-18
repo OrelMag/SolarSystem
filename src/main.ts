@@ -1,5 +1,8 @@
 import "./style.css";
 import { GIFEncoder, applyPalette, quantize } from "gifenc";
+import { formatDatasetNotes } from "./app/datasetPanel";
+import { formatDriftPartsPerMillion } from "./app/diagnosticsPanel";
+import { requireElement } from "./app/dom";
 import {
   DiagnosticsHistory,
   sparkline,
@@ -17,8 +20,12 @@ import {
   updateLaunchMissionState,
   updateLaunchMissionGuidanceMode,
   type LaunchMissionState,
-  type LaunchMissionStatus,
 } from "./app/launchMission";
+import { launchStatusLabel } from "./app/launchPanel";
+import {
+  formatGifExportProgress,
+  yieldToBrowser,
+} from "./app/gifExportController";
 import { calculatePhysicsStepBudget } from "./app/simulationClock";
 import {
   formatDuration,
@@ -33,7 +40,6 @@ import {
   DEFAULT_TIME_SCALE_SECONDS,
   findScenario,
   SCENARIOS,
-  type ScenarioDefinition,
 } from "./app/scenarios";
 import { buildSelectedBodyDetail } from "./app/selectedBody";
 import {
@@ -45,7 +51,11 @@ import {
   visualSettingsToScaleMap,
   type VisualBodyScaleSettings,
 } from "./app/visualSettings";
-import type { HierarchicalBodyState, HierarchicalOrbitalBody } from "./domain/orbits";
+import {
+  calculateScenarioOrbitalStates,
+  createScenarioSimulation,
+} from "./app/simulationSession";
+import type { HierarchicalOrbitalBody } from "./domain/orbits";
 import { magnitude } from "./domain/vector";
 import {
   calculateConservedQuantities,
@@ -54,10 +64,6 @@ import {
 } from "./physics/diagnostics";
 import { createMinimumDistanceCollisionPolicy } from "./physics/collisionPolicy";
 import { DAY_SECONDS, J2000_ISO } from "./physics/constants";
-import {
-  propagateHierarchicalBodies,
-  validateOrbitalHierarchy,
-} from "./physics/hierarchicalOrbits";
 import { calculateAccelerations } from "./physics/gravity";
 import {
   calculateSpacecraftGuidance,
@@ -103,35 +109,6 @@ const TIME_SCALE_LABELS = new Map<string, string>([
   ["2592000", "30 days/s"],
   ["31557600", "1 year/s"],
 ]);
-
-function requireElement<T extends HTMLElement>(id: string): T {
-  const element = document.getElementById(id);
-  if (!(element instanceof HTMLElement)) throw new Error(`Missing element "#${id}".`);
-  return element as T;
-}
-
-function createSimulation(scenario: ScenarioDefinition): NBodySimulation {
-  const bodies = scenario.createBodies();
-  validateOrbitalHierarchy(
-    scenario.displayOnlyOrbitalBodies,
-    bodies.map((body) => body.id),
-  );
-  return new NBodySimulation(bodies, {
-    fixedTimestepSeconds: DEFAULT_FIXED_TIMESTEP_SECONDS,
-    collisionPolicy: COLLISION_POLICY,
-  });
-}
-
-function calculateOrbitalStates(
-  orbitalDefinitions: readonly HierarchicalOrbitalBody[],
-  simulation: NBodySimulation,
-): HierarchicalBodyState[] {
-  return propagateHierarchicalBodies(
-    orbitalDefinitions,
-    simulation.bodies,
-    2_451_545 + simulation.elapsedSeconds / DAY_SECONDS,
-  );
-}
 
 function formatTimeScale(seconds: number): string {
   if (seconds === 1) return "Real time";
@@ -259,9 +236,13 @@ for (const scenario of SCENARIOS) {
 }
 
 let currentScenario = findScenario(scenarioSelect.value || "full-solar-system");
-let simulation = createSimulation(currentScenario);
+let simulation = createScenarioSimulation(
+  currentScenario,
+  COLLISION_POLICY,
+  DEFAULT_FIXED_TIMESTEP_SECONDS,
+);
 let orbitalDefinitions = currentScenario.displayOnlyOrbitalBodies;
-let orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+let orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
 let visualSettings: VisualBodyScaleSettings = loadVisualSettings(window.localStorage);
 let renderer = createRenderer();
 let running = true;
@@ -350,11 +331,6 @@ function renderLaunchTargets(): void {
     launchTargetSelect.value = options[0].id;
   }
   renderLaunchPanel();
-}
-
-function launchStatusLabel(status: LaunchMissionStatus): string {
-  if (status === "en-route") return "EN ROUTE";
-  return status.toUpperCase();
 }
 
 function renderLaunchPanel(): void {
@@ -531,10 +507,7 @@ function updateDatasetPanel(): void {
   datasetSourceElement.textContent = currentScenario.metadata.source;
   datasetEpochElement.textContent = currentScenario.metadata.epoch;
   datasetFrameElement.textContent = currentScenario.metadata.referenceFrame;
-  datasetNotesElement.textContent =
-    `${currentScenario.description} ${currentScenario.metadata.notes} ` +
-    `Units: ${currentScenario.metadata.originalUnits}. ` +
-    `Conversion: ${currentScenario.metadata.conversionApplied}`;
+  datasetNotesElement.textContent = formatDatasetNotes(currentScenario);
 }
 
 function resetDiagnostics(): void {
@@ -570,7 +543,7 @@ function launchSpacecraft(): void {
   const targetId = launchTargetSelect.value;
   if (!targetId) return;
   clearActiveSpacecraft(false);
-  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+  orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
   const target = findLaunchTargetState({
     id: targetId,
     bodies: simulation.bodies,
@@ -638,7 +611,7 @@ function resetCurrentScenario(): void {
   clearActiveSpacecraft(false);
   simulation.reset();
   accumulatorSeconds = 0;
-  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+  orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
   resetDiagnostics();
   selectedBodyId = currentScenario.defaultTargetId;
   launchMission = undefined;
@@ -660,8 +633,12 @@ function resetCurrentScenario(): void {
 function switchScenario(id: string): void {
   currentScenario = findScenario(id);
   orbitalDefinitions = currentScenario.displayOnlyOrbitalBodies;
-  simulation = createSimulation(currentScenario);
-  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+  simulation = createScenarioSimulation(
+    currentScenario,
+    COLLISION_POLICY,
+    DEFAULT_FIXED_TIMESTEP_SECONDS,
+  );
+  orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
   launchMission = undefined;
   launchInjectionSpeedMps = undefined;
   selectedBodyId = currentScenario.defaultTargetId;
@@ -793,10 +770,6 @@ function downloadBlob(blob: Blob, fileName: string, objectUrls: string[]): void 
   link.remove();
 }
 
-function yieldToBrowser(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
-}
-
 async function exportCurrentViewGif(): Promise<void> {
   if (activeGifExport) return;
 
@@ -869,7 +842,10 @@ async function exportCurrentViewGif(): Promise<void> {
         if (completedSteps % (stepChunk * 4) === 0) await yieldToBrowser();
       }
 
-      const exportOrbitalStates = calculateOrbitalStates(orbitalDefinitions, exportSimulation);
+      const exportOrbitalStates = calculateScenarioOrbitalStates(
+        orbitalDefinitions,
+        exportSimulation,
+      );
       exportRenderer.update(
         exportSimulation.bodies,
         exportOrbitalStates,
@@ -890,7 +866,7 @@ async function exportCurrentViewGif(): Promise<void> {
       setGifExportUi({
         exporting: true,
         progress,
-        message: `Encoding frame ${frameIndex + 1} of ${estimate.frameCount}`,
+        message: formatGifExportProgress(frameIndex, estimate.frameCount),
       });
       await yieldToBrowser();
     }
@@ -951,8 +927,10 @@ function updateTelemetry(stepsThisFrame: number, clamped: boolean): void {
     angularMomentumWarningDrift: ANGULAR_WARNING_DRIFT,
   });
   const latest = status.samples.at(-1);
-  energyDriftElement.textContent = `${(((latest?.energyDrift ?? 0) * 1e6)).toFixed(3)} ppm`;
-  momentumDriftElement.textContent = `${(((latest?.angularMomentumDrift ?? 0) * 1e6)).toFixed(3)} ppm`;
+  energyDriftElement.textContent = formatDriftPartsPerMillion(latest?.energyDrift ?? 0);
+  momentumDriftElement.textContent = formatDriftPartsPerMillion(
+    latest?.angularMomentumDrift ?? 0,
+  );
   energySparkElement.textContent = sparkline(status.samples, "energyDrift");
   angularSparkElement.textContent = sparkline(status.samples, "angularMomentumDrift");
   linearMomentumElement.textContent = status.linearMomentumMagnitude.toExponential(3);
@@ -1117,7 +1095,7 @@ function frame(now: number): void {
       clamped = true;
     }
   }
-  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+  orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
   if (launchMission) {
     launchMission = updateLaunchMissionState({
       mission: launchMission,
