@@ -90,6 +90,7 @@ import {
   type TrailMode,
   type ViewFrame,
 } from "./rendering/SolarSystemRenderer";
+import { findPrimaryBody } from "./rendering/viewFrame";
 import {
   filterNavigatorEntries,
   groupNavigatorEntries,
@@ -148,13 +149,15 @@ function createNavigatorEntries(
   orbitalDefinitions: readonly HierarchicalOrbitalBody[],
   namesById: ReadonlyMap<string, string>,
 ): NavigatorEntry[] {
+  const primaryBody = findNavigatorPrimaryBody(bodies);
+  const primaryName = primaryBody ? namesById.get(primaryBody.id) ?? primaryBody.name : "Sun";
   return [
     ...bodies.map((body) => ({
       id: body.id,
       name: body.name,
       category: body.category,
       parentName:
-        body.id === "sun" ? undefined : namesById.get(body.parentId ?? "sun") ?? "Sun",
+        body.id === primaryBody?.id ? undefined : namesById.get(body.parentId ?? primaryBody?.id ?? "sun") ?? primaryName,
     })),
     ...orbitalDefinitions.map((body) => ({
       id: body.id,
@@ -163,6 +166,20 @@ function createNavigatorEntries(
       parentName: namesById.get(body.parentId),
     })),
   ];
+}
+
+function findNavigatorPrimaryBody(
+  bodies: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly category: NavigatorCategory;
+  }[],
+): (typeof bodies)[number] | undefined {
+  return (
+    bodies.find((body) => body.id === "sun") ??
+    bodies.find((body) => body.category === "star") ??
+    bodies[0]
+  );
 }
 
 const sceneElement = requireElement("scene");
@@ -293,15 +310,15 @@ let activeGifExport:
   | undefined;
 
 function createRenderer(): SolarSystemRenderer {
-  const sun = simulation.bodies.find((body) => body.id === "sun") ?? simulation.bodies[0];
-  if (!sun) throw new Error("Scenario must include at least one massive body.");
+  const primary = findPrimaryBody(simulation.bodies);
+  if (!primary) throw new Error("Scenario must include at least one massive body.");
   const instance = new SolarSystemRenderer(
     sceneElement,
     labelsElement,
     getDisplayBodies(),
     orbitalDefinitions,
     currentScenario.belts,
-    sun.massKg,
+    primary.massKg,
   );
   instance.onBodySelected(selectAndFollow);
   instance.onFollowChanged((id) => {
@@ -313,14 +330,6 @@ function createRenderer(): SolarSystemRenderer {
 
 function getDisplayBodies(): readonly Readonly<MutableBodyState>[] {
   return dockedSpacecraft ? [...simulation.bodies, dockedSpacecraft] : simulation.bodies;
-}
-
-function getDisplayBodiesFor(
-  bodies: readonly Readonly<MutableBodyState>[],
-  orbitalStatesForBodies: typeof orbitalStates,
-): readonly Readonly<MutableBodyState>[] {
-  const docked = createDockedSpacecraftFor(bodies, orbitalStatesForBodies);
-  return docked ? [...bodies, docked] : bodies;
 }
 
 function createDockedSpacecraftFor(
@@ -918,37 +927,73 @@ async function exportCurrentViewGif(): Promise<void> {
 
   const options = normalizeGifExportOptions(getGifExportOptionsFromControls());
   syncGifExportSizeControls(estimate);
-  const viewSnapshot = renderer.getViewSnapshot();
+  const exportSnapshot = simulation.snapshot;
+  const exportFixedTimestepSeconds = simulation.fixedTimestepSeconds;
+  const exportOrbitalDefinitions = orbitalDefinitions;
+  const exportBelts = currentScenario.belts;
+  const exportSelectedBodyId = selectedBodyId;
+  const exportTrailMode = trailModeSelect.value as TrailMode;
+  const exportViewSnapshot = renderer.getViewSnapshot();
+  const exportDockedSpacecraft = dockedSpacecraft
+    ? {
+        ...dockedSpacecraft,
+        positionM: { ...dockedSpacecraft.positionM },
+        velocityMps: { ...dockedSpacecraft.velocityMps },
+        visual: { ...dockedSpacecraft.visual },
+      }
+    : undefined;
+  const exportDockedSpacecraftDirectionM = dockedSpacecraftDirectionM
+    ? { ...dockedSpacecraftDirectionM }
+    : undefined;
+  const exportLaunchMission = launchMission;
   const exportJob = { cancelled: false, objectUrls: [] as string[] };
   activeGifExport = exportJob;
   setGifExportUi({ exporting: true, progress: 0, message: "Preparing GIF export..." });
 
-  const exportSimulation = NBodySimulation.fromSnapshot(simulation.snapshot, {
-    fixedTimestepSeconds: simulation.fixedTimestepSeconds,
+  const getExportDisplayBodies = (
+    bodies: readonly Readonly<MutableBodyState>[],
+    orbitalStatesForBodies: typeof orbitalStates,
+  ): readonly Readonly<MutableBodyState>[] => {
+    if (!exportDockedSpacecraft || !exportLaunchMission) return bodies;
+    const target = findLaunchTargetState({
+      id: exportLaunchMission.targetId,
+      bodies,
+      orbitalStates: orbitalStatesForBodies,
+    });
+    const docked = target
+      ? createDockedSpacecraftBody({
+          target,
+          approachDirectionM: exportDockedSpacecraftDirectionM,
+        })
+      : exportDockedSpacecraft;
+    return [...bodies, docked];
+  };
+
+  const exportSimulation = NBodySimulation.fromSnapshot(exportSnapshot, {
+    fixedTimestepSeconds: exportFixedTimestepSeconds,
     collisionPolicy: COLLISION_POLICY,
   });
   const initialExportOrbitalStates = calculateScenarioOrbitalStates(
-    orbitalDefinitions,
+    exportOrbitalDefinitions,
     exportSimulation,
   );
+  const exportPrimary = findPrimaryBody(exportSimulation.bodies);
   const stage = createExportStage(options.outputWidthPx, options.outputHeightPx);
   const exportRenderer = new SolarSystemRenderer(
     stage.container,
     stage.labels,
-    getDisplayBodiesFor(exportSimulation.bodies, initialExportOrbitalStates),
-    orbitalDefinitions,
-    currentScenario.belts,
-    exportSimulation.bodies.find((body) => body.id === "sun")?.massKg ??
-      exportSimulation.bodies[0]?.massKg ??
-      1,
+    getExportDisplayBodies(exportSimulation.bodies, initialExportOrbitalStates),
+    exportOrbitalDefinitions,
+    exportBelts,
+    exportPrimary?.massKg ?? 1,
     { pixelRatio: 1 },
   );
 
   try {
     copyRendererSettings(exportRenderer);
-    exportRenderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
-    exportRenderer.selectBody(selectedBodyId);
-    exportRenderer.applyViewSnapshot(viewSnapshot);
+    exportRenderer.setTrailMode(exportTrailMode, exportSelectedBodyId);
+    exportRenderer.selectBody(exportSelectedBodyId);
+    exportRenderer.applyViewSnapshot(exportViewSnapshot);
 
     const gif = GIFEncoder();
     let completedSteps = 0;
@@ -969,11 +1014,11 @@ async function exportCurrentViewGif(): Promise<void> {
       }
 
       const exportOrbitalStates = calculateScenarioOrbitalStates(
-        orbitalDefinitions,
+        exportOrbitalDefinitions,
         exportSimulation,
       );
       exportRenderer.update(
-        getDisplayBodiesFor(exportSimulation.bodies, exportOrbitalStates),
+        getExportDisplayBodies(exportSimulation.bodies, exportOrbitalStates),
         exportOrbitalStates,
         exportSimulation.elapsedSeconds,
       );
@@ -1118,7 +1163,9 @@ fitInnerButton.addEventListener("click", () => {
   renderer.stopFollowing();
   renderer.fitInnerSystem();
 });
-focusSunButton.addEventListener("click", () => selectAndFollow("sun"));
+focusSunButton.addEventListener("click", () => {
+  selectAndFollow(findPrimaryBody(getDisplayBodies())?.id ?? selectedBodyId);
+});
 focusSelectedButton.addEventListener("click", () => renderer.focusBody(selectedBodyId, true));
 showAllButton.addEventListener("click", () => renderer.showAll());
 stopFollowButton.addEventListener("click", () => renderer.stopFollowing());

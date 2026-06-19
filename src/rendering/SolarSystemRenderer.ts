@@ -24,7 +24,7 @@ import {
 import { calculateBarycenterScenePosition } from "./barycenterOverlay";
 import { shouldShowCometVisual } from "./cometVisibility";
 import { shouldShowMoon } from "./moonVisibility";
-import { resolveViewFrameOrigin, type ViewFrame } from "./viewFrame";
+import { findPrimaryBody, resolveViewFrameOrigin, type ViewFrame } from "./viewFrame";
 import {
   calculateMarkerSizing,
   calculatePhysicalMarkerRadius,
@@ -137,6 +137,7 @@ export class SolarSystemRenderer {
   private viewFrame: ViewFrame = "barycentric";
   private viewFrameOriginM = { x: 0, y: 0, z: 0 };
   private viewFrameOriginBodyId = "sun";
+  private primaryBodyId = "sun";
   private trailMode: TrailMode = "all";
   private trailPointLimit = TRAIL_POINT_LIMITS.medium;
   private markerScaleMode: MarkerScaleMode = "readable";
@@ -181,6 +182,7 @@ export class SolarSystemRenderer {
     this.addBackground();
     this.barycenterMesh = this.createBarycenterMesh();
     this.barycenterLabel = this.createLabel("Center of mass");
+    this.primaryBodyId = findPrimaryBody(bodies)?.id ?? "sun";
     this.createBodyViews(bodies);
     this.createOrbitalViews(orbitalBodies);
     this.createBeltViews(belts);
@@ -226,8 +228,9 @@ export class SolarSystemRenderer {
     orbitalStates: readonly HierarchicalBodyState[],
     elapsedSeconds: number,
   ): void {
-    const sun = bodies.find((body) => body.id === "sun");
-    if (!sun) return;
+    const primary = findPrimaryBody(bodies);
+    if (!primary) return;
+    this.primaryBodyId = primary.id;
     this.viewFrameOriginM = resolveViewFrameOrigin({
       frame: this.viewFrame,
       selectedBodyId: this.selectedBodyId,
@@ -270,17 +273,17 @@ export class SolarSystemRenderer {
         view.orbit.position.copy(this.toScenePosition(orbitalState.parentPositionM));
       }
       if (orbitalState.body.category === "comet" && view.tail) {
-        this.updateCometTail(view.tail, scenePosition, this.toScenePosition(sun.positionM));
+        this.updateCometTail(view.tail, scenePosition, this.toScenePosition(primary.positionM));
       }
     }
 
     const julianDay = J2000_JULIAN_DAY + elapsedSeconds / DAY_SECONDS;
-    this.updateBelts(julianDay, this.toScenePosition(sun.positionM));
+    this.updateBelts(julianDay, this.toScenePosition(primary.positionM));
     if (
       elapsedSeconds - this.lastOrbitRefreshSeconds >= ORBIT_REFRESH_SECONDS ||
       elapsedSeconds === 0
     ) {
-      this.updateOrbitPaths(bodies, orbitalStates, sun);
+      this.updateOrbitPaths(bodies, orbitalStates, primary);
       this.lastOrbitRefreshSeconds = elapsedSeconds;
     }
     this.updateFollowTarget();
@@ -397,7 +400,7 @@ export class SolarSystemRenderer {
   setPlanetPathsVisible(visible: boolean): void {
     this.planetPathsVisible = visible;
     for (const [id, view] of this.bodyViews) {
-      view.orbit.visible = visible && id !== "sun" && view.category !== "moon";
+      view.orbit.visible = visible && id !== this.primaryBodyId && view.category !== "moon";
     }
     this.updateMoonVisibility();
   }
@@ -532,7 +535,7 @@ export class SolarSystemRenderer {
       ("body" in view && view.body.category === "moon");
     this.camera.zoom = Math.max(
       this.camera.zoom,
-      id === "sun" ? 5 : hasMoons || isMoon ? 90 : 14,
+      id === this.primaryBodyId ? 5 : hasMoons || isMoon ? 90 : 14,
     );
     this.camera.updateProjectionMatrix();
     if (follow) this.setFollowBody(id);
@@ -599,6 +602,7 @@ export class SolarSystemRenderer {
     this.renderer.domElement.removeEventListener("pointerdown", this.handlePointerDown);
     this.controls.dispose();
     this.controls.removeEventListener("start", this.handleControlsStart);
+    this.disposeObject(this.scene);
     this.renderer.domElement.remove();
     this.renderer.dispose();
     for (const view of this.bodyViews.values()) view.label.remove();
@@ -626,7 +630,7 @@ export class SolarSystemRenderer {
     const orbitOpacity = body.category === "star" ? 0 : body.category === "spacecraft" ? 0.35 : 0.18;
     const trail = this.createLine(body.visual.color, trailOpacity);
     const orbit = this.createLine(body.visual.color, orbitOpacity);
-    orbit.visible = body.id !== "sun";
+    orbit.visible = body.id !== this.primaryBodyId;
     this.bodyViews.set(body.id, {
       mesh,
       label,
@@ -707,10 +711,10 @@ export class SolarSystemRenderer {
   private updateOrbitPaths(
     bodies: readonly Readonly<MutableBodyState>[],
     orbitalStates: readonly MasslessBodyState[],
-    sun: Readonly<MutableBodyState>,
+    primary: Readonly<MutableBodyState>,
   ): void {
     for (const body of bodies) {
-      if (body.id === "sun") continue;
+      if (body.id === primary.id) continue;
       const view = this.bodyViews.get(body.id);
       if (!view) continue;
       if (this.usesLocalParentDisplay(body)) {
@@ -732,8 +736,8 @@ export class SolarSystemRenderer {
         view.orbit.position.copy(this.toScenePosition(parent.positionM));
         continue;
       }
-      const relativePosition = subtract(body.positionM, sun.positionM);
-      const relativeVelocity = subtract(body.velocityMps, sun.velocityMps);
+      const relativePosition = subtract(body.positionM, primary.positionM);
+      const relativeVelocity = subtract(body.velocityMps, primary.velocityMps);
       const elements = stateToOsculatingElements(
         relativePosition,
         relativeVelocity,
@@ -741,7 +745,7 @@ export class SolarSystemRenderer {
         J2000_JULIAN_DAY,
       );
       const points = sampleOrbitPath(elements).map((point) =>
-        this.toScenePosition(add(point, sun.positionM)),
+        this.toScenePosition(add(point, primary.positionM)),
       );
       view.orbit.geometry.setFromPoints(points);
       view.orbit.visible = this.planetPathsVisible;
@@ -1239,7 +1243,7 @@ export class SolarSystemRenderer {
 
   private disposeObject(object: THREE.Object3D): void {
     object.traverse((child) => {
-      if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points) {
         child.geometry.dispose();
         const material = child.material;
         if (Array.isArray(material)) {

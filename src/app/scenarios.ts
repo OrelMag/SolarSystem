@@ -138,6 +138,7 @@ function createTwoBodyValidation(): CelestialBody[] {
       id: "validation-orbiter",
       name: "Validation Orbiter",
       category: "planet",
+      parentId: "validation-primary",
       massKg: earthMassKg,
       radiusM: 6_371_000,
       positionM: vector(radiusM, 0, 0),

@@ -23,6 +23,43 @@ describe("selected body details", () => {
     expect(detail?.note).toContain("life");
   });
 
+  it("treats a non-sun root star as parentless", () => {
+    const bodies = [
+      {
+        id: "validation-primary",
+        name: "Validation Primary",
+        category: "star" as const,
+        massKg: 1e26,
+        radiusM: 1e6,
+        positionM: { x: 0, y: 0, z: 0 },
+        velocityMps: { x: 0, y: 0, z: 0 },
+        visual: { color: 0xffffff },
+      },
+      {
+        id: "validation-orbiter",
+        name: "Validation Orbiter",
+        category: "planet" as const,
+        parentId: "validation-primary",
+        massKg: 1e20,
+        radiusM: 1e4,
+        positionM: { x: 1e9, y: 0, z: 0 },
+        velocityMps: { x: 0, y: 2_500, z: 0 },
+        visual: { color: 0xffffff },
+      },
+    ];
+    const names = new Map(bodies.map((body) => [body.id, body.name] as const));
+    const detail = buildSelectedBodyDetail({
+      id: "validation-primary",
+      massiveBodies: bodies,
+      orbitalStates: [],
+      namesById: names,
+      accelerationsById: new Map(),
+    });
+
+    expect(detail?.rows).toContainEqual({ label: "Parent", value: "None" });
+    expect(detail?.rows.map((row) => row.label)).toContain("Barycenter offset");
+  });
+
   it("labels physical moons as simulated bodies with parent-relative values", () => {
     const bodies = createPhysicalSolarSystem();
     const names = new Map(bodies.map((body) => [body.id, body.name] as const));

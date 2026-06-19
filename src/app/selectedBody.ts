@@ -56,6 +56,7 @@ function buildMassiveDetail(
     MASSIVE_BODY_FACTS[body.id] ??
     PHYSICAL_ORBITAL_BODIES.find((candidate) => candidate.id === body.id)?.facts;
   const acceleration = accelerationsById.get(body.id) ?? { x: 0, y: 0, z: 0 };
+  const rootStar = body.category === "star" && !body.parentId;
   const rows = [
     { label: "Category", value: body.category },
     { label: "Mass", value: formatMass(body.massKg) },
@@ -63,11 +64,11 @@ function buildMassiveDetail(
     {
       label: "Parent",
       value:
-        body.id === "sun" ? "None" : namesById.get(body.parentId ?? "sun") ?? "Sun",
+        rootStar ? "None" : namesById.get(body.parentId ?? "sun") ?? "Sun",
     },
     {
       label:
-        body.id === "sun"
+        rootStar
           ? "Barycenter offset"
           : body.parentId
             ? "Parent distance"

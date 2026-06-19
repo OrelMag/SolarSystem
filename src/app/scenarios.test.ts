@@ -29,4 +29,11 @@ describe("scenarios", () => {
       }
     }
   });
+
+  it("attaches the two-body validation orbiter to its primary", () => {
+    const validation = SCENARIOS.find((scenario) => scenario.id === "two-body-validation");
+    const orbiter = validation?.createBodies().find((body) => body.id === "validation-orbiter");
+
+    expect(orbiter?.parentId).toBe("validation-primary");
+  });
 });

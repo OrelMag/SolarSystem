@@ -79,3 +79,18 @@ test("launches a spacecraft toward a planet", async ({ page }) => {
   await page.locator("#body-search").fill("Spacecraft");
   await expect(page.locator("#body-results").getByRole("option", { name: /Spacecraft/i })).toBeVisible();
 });
+
+test("loads the no-Sun two-body validation scenario", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await page.goto("/");
+  await page.locator("#scenario").selectOption("two-body-validation");
+
+  await expect(page.locator("#selected-body")).toContainText("Validation Orbiter");
+  await expect(page.locator("#selected-body")).toContainText("Validation Primary");
+
+  await page.locator("#focus-sun").click();
+  await expect(page.locator("#selected-body")).toContainText("Validation Primary");
+  expect(pageErrors).toEqual([]);
+});

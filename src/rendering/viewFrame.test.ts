@@ -45,6 +45,40 @@ describe("resolveViewFrameOrigin", () => {
     expect(bodies[0]?.positionM).toEqual({ x: 1, y: 2, z: 3 });
   });
 
+  it("uses the primary star for sun-centered view when no body is named sun", () => {
+    const validationBodies = [
+      {
+        id: "validation-primary",
+        name: "Validation Primary",
+        category: "star" as const,
+        massKg: 1,
+        radiusM: 1,
+        positionM: { x: 7, y: 8, z: 9 },
+        velocityMps: { x: 0, y: 0, z: 0 },
+        visual: { color: 0 },
+      },
+      {
+        id: "validation-orbiter",
+        name: "Validation Orbiter",
+        category: "planet" as const,
+        massKg: 1,
+        radiusM: 1,
+        positionM: { x: 10, y: 11, z: 12 },
+        velocityMps: { x: 0, y: 0, z: 0 },
+        visual: { color: 0 },
+      },
+    ];
+
+    expect(
+      resolveViewFrameOrigin({
+        frame: "sun-centered",
+        selectedBodyId: "validation-orbiter",
+        bodies: validationBodies,
+        orbitalStates: [],
+      }),
+    ).toBe(validationBodies[0]?.positionM);
+  });
+
   it("uses the selected body's physical position for selected-centered view", () => {
     expect(
       resolveViewFrameOrigin({
