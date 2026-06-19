@@ -94,3 +94,34 @@ test("loads the no-Sun two-body validation scenario", async ({ page }) => {
   await expect(page.locator("#selected-body")).toContainText("Validation Primary");
   expect(pageErrors).toEqual([]);
 });
+
+test("loads the infinite inner-system wallpaper mode", async ({ page }) => {
+  await page.setViewportSize({ width: 3440, height: 1440 });
+  await page.goto("/wallpaper.html");
+
+  const canvas = page.locator("#scene canvas");
+  await expect(canvas).toBeVisible();
+  await expect(page.locator("body")).toHaveClass(/wallpaper-mode/);
+  await expect(page.locator(".panel")).toBeHidden();
+  await expect(page.locator(".brand")).toBeHidden();
+  await expect(page.locator(".hint")).toBeHidden();
+  await expect(page.locator("#scenario")).toHaveValue("inner-planets");
+
+  await expect
+    .poll(async () =>
+      canvas.evaluate((node) => {
+        const bounds = (node as HTMLCanvasElement).getBoundingClientRect();
+        return `${Math.round(bounds.width)}x${Math.round(bounds.height)}`;
+      }),
+    )
+    .toBe("3440x1440");
+  await expect
+    .poll(async () => canvas.evaluate((node) => (node as HTMLCanvasElement).toDataURL().length))
+    .toBeGreaterThan(1_000);
+  await expect.poll(async () => page.locator("#elapsed").textContent()).not.toBe("0.00 days");
+
+  const firstFrame = await canvas.evaluate((node) => (node as HTMLCanvasElement).toDataURL());
+  await page.waitForTimeout(500);
+  const secondFrame = await canvas.evaluate((node) => (node as HTMLCanvasElement).toDataURL());
+  expect(secondFrame).not.toBe(firstFrame);
+});

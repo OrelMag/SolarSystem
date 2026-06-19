@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="A data-driven Newtonian simulation of the Solar System."
+    />
+    <title>Solar System Wallpaper</title>
+  </head>
+  <body class="wallpaper-mode">
+    <main id="app">
+      <section class="viewport" aria-label="Solar System simulation">
+        <div id="scene"></div>
+        <div class="brand">
+          <span class="eyebrow">NEWTONIAN ORRERY</span>
+          <h1>Solar System</h1>
+          <p>Top-down heliocentric view</p>
+        </div>
+        <div id="labels" aria-hidden="true"></div>
+        <div class="hint">Drag to pan &middot; Scroll to zoom &middot; Click a body to focus</div>
+      </section>
+
+      <aside class="panel">
+        <section class="control-section">
+          <div class="section-heading">
+            <span>Simulation</span>
+            <span id="status" class="status">RUNNING</span>
+          </div>
+          <div class="button-row">
+            <button id="toggle" class="primary" type="button">Pause</button>
+            <button id="reset" type="button">Reset</button>
+          </div>
+          <label for="scenario">Scenario</label>
+          <select id="scenario"></select>
+          <label for="speed-select">Time scale <output id="speed-value">7 days/s</output></label>
+          <select id="speed-select">
+            <option value="paused">Paused</option>
+            <option value="1">Real time</option>
+            <option value="3600">1 hour/s</option>
+            <option value="86400">1 day/s</option>
+            <option value="604800" selected>7 days/s</option>
+            <option value="2592000">30 days/s</option>
+            <option value="31557600">1 year/s</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input id="custom-speed" type="number" min="1" step="1" value="604800" hidden />
+          <div class="export-controls">
+            <div class="export-size-controls">
+              <label for="gif-output-width">Width</label>
+              <input id="gif-output-width" type="number" min="320" step="1" value="3440" />
+              <label for="gif-output-height">Height</label>
+              <input id="gif-output-height" type="number" min="180" step="1" value="1440" />
+            </div>
+            <button id="export-gif" type="button">Export GIF</button>
+            <button id="cancel-gif-export" type="button" hidden>Cancel Export</button>
+            <progress id="gif-export-progress" max="1" value="0" hidden></progress>
+            <output id="gif-export-status">Export the current view over one Earth cycle.</output>
+          </div>
+        </section>
+
+        <section class="control-section launch-section">
+          <div class="section-heading">
+            <span>Launch</span>
+            <span id="launch-status" class="status">READY</span>
+          </div>
+          <label for="launch-target">Target</label>
+          <select id="launch-target"></select>
+          <div class="button-row">
+            <button id="launch-spacecraft" class="primary" type="button">Launch</button>
+            <button id="clear-spacecraft" type="button">Clear Craft</button>
+          </div>
+          <dl>
+            <div><dt>Distance</dt><dd id="launch-distance">-</dd></div>
+            <div><dt>Closest</dt><dd id="launch-closest">-</dd></div>
+            <div><dt>Estimate</dt><dd id="launch-estimate">-</dd></div>
+            <div><dt>Injection</dt><dd id="launch-injection">-</dd></div>
+          </dl>
+        </section>
+
+        <section class="control-section navigator-section">
+          <div class="section-heading"><span>Body Navigator</span></div>
+          <label class="sr-only" for="body-search">Search bodies</label>
+          <input
+            id="body-search"
+            class="search-input"
+            type="search"
+            placeholder="Search planets, moons, comets..."
+            autocomplete="off"
+            aria-controls="body-results"
+            aria-expanded="true"
+          />
+          <div id="body-results" class="body-results" role="listbox"></div>
+        </section>
+
+        <section class="control-section">
+          <div class="section-heading"><span>View & Camera</span></div>
+          <label for="view-frame">Reference frame</label>
+          <select id="view-frame">
+            <option value="barycentric">Barycentric</option>
+            <option value="sun-centered">Sun-centered</option>
+            <option value="selected-centered">Selected-centered</option>
+          </select>
+          <div class="button-row view-buttons">
+            <button id="focus-sun" type="button">Focus Sun</button>
+            <button id="focus-selected" type="button">Focus Selected</button>
+            <button id="show-all" type="button">Show All</button>
+            <button id="fit-inner" type="button">Inner System</button>
+          </div>
+          <button id="fit" type="button">Full System</button>
+        </section>
+
+        <section class="control-section">
+          <div class="section-heading"><span>View Layers</span></div>
+          <label for="marker-scale-mode">Body size</label>
+          <select id="marker-scale-mode">
+            <option value="readable" selected>Readable</option>
+            <option value="physical">Physical</option>
+          </select>
+          <label class="check-row"><input id="manual-scale-enabled" type="checkbox" /><span>Manual body scale overrides</span></label>
+          <div id="manual-scale-controls" class="manual-scale-controls" hidden>
+            <label for="body-scale">
+              <span id="body-scale-name">Selected body</span>
+              <output id="body-scale-value">1.00x</output>
+            </label>
+            <input id="body-scale" type="range" min="0.25" max="4" step="0.05" value="1" />
+            <div class="button-row view-buttons">
+              <button id="reset-body-scale" type="button">Reset Selected</button>
+              <button id="reset-all-body-scales" type="button">Reset All</button>
+            </div>
+          </div>
+          <label for="trail-mode">Trails</label>
+          <select id="trail-mode">
+            <option value="all">All massive bodies</option>
+            <option value="planets">Planets only</option>
+            <option value="selected">Selected only</option>
+            <option value="off">Off</option>
+          </select>
+          <label for="trail-length">Trail length</label>
+          <select id="trail-length">
+            <option value="short">Short</option>
+            <option value="medium" selected>Medium</option>
+            <option value="long">Long</option>
+          </select>
+          <button id="clear-trails" type="button">Clear Trails</button>
+          <label class="check-row"><input id="trails" type="checkbox" checked /><span>Historical trails enabled</span></label>
+          <label class="check-row"><input id="planet-paths" type="checkbox" checked /><span>Planet paths</span></label>
+          <label class="check-row"><input id="main-belt" type="checkbox" checked /><span>Main asteroid belt</span></label>
+          <label class="check-row"><input id="kuiper-belt" type="checkbox" checked /><span>Kuiper belt</span></label>
+          <label class="check-row"><input id="comets-toggle" type="checkbox" /><span>Comets</span></label>
+          <label class="check-row"><input id="comet-paths" type="checkbox" checked /><span>Comet paths</span></label>
+          <label class="check-row"><input id="comet-tails" type="checkbox" checked /><span>Comet tails</span></label>
+          <label class="check-row"><input id="moons-toggle" type="checkbox" checked /><span>Major moons</span></label>
+          <label class="check-row"><input id="barycenter-toggle" type="checkbox" /><span>Center of mass marker</span></label>
+          <label class="check-row"><input id="labels-toggle" type="checkbox" checked /><span>Body labels</span></label>
+          <label for="distance-scale">
+            Distance scale
+            <output id="distance-scale-value">1x physical</output>
+          </label>
+          <input id="distance-scale" type="range" min="1" max="8" step="1" value="1" />
+          <div class="speed-labels"><span>Physical</span><span>All expanded</span></div>
+        </section>
+
+        <section class="control-section diagnostics">
+          <div class="section-heading"><span>Telemetry</span></div>
+          <dl>
+            <div><dt>Epoch</dt><dd id="date">2000-01-01</dd></div>
+            <div><dt>Elapsed</dt><dd id="elapsed">0.00 days</dd></div>
+            <div><dt>Physics step</dt><dd id="step">5 minutes</dd></div>
+            <div><dt>Time scale</dt><dd id="time-scale">7 days/s</dd></div>
+            <div><dt>Max steps</dt><dd id="max-steps">80</dd></div>
+            <div><dt>Catch-up clamp</dt><dd id="catchup">Idle</dd></div>
+            <div><dt>Physics time</dt><dd id="physics-time">0.00 ms</dd></div>
+            <div><dt>Render time</dt><dd id="render-time">0.00 ms</dd></div>
+            <div><dt>Diagnostics time</dt><dd id="diagnostics-time">0.00 ms</dd></div>
+            <div><dt>Bodies</dt><dd id="body-count">0</dd></div>
+            <div><dt>Visible objects</dt><dd id="visible-objects">0</dd></div>
+            <div><dt>Energy drift</dt><dd id="energy-drift">0.00 ppm</dd></div>
+            <div><dt>Energy trend</dt><dd id="energy-spark"></dd></div>
+            <div><dt>Angular drift</dt><dd id="momentum-drift">0.00 ppm</dd></div>
+            <div><dt>Angular trend</dt><dd id="angular-spark"></dd></div>
+            <div><dt>Linear momentum</dt><dd id="linear-momentum">0</dd></div>
+            <div><dt>Angular momentum</dt><dd id="angular-momentum">0</dd></div>
+            <div><dt>Center of mass</dt><dd id="center-mass">0 m</dd></div>
+            <div><dt>Steps / frame</dt><dd id="steps-frame">0</dd></div>
+            <div><dt>Status</dt><dd id="diagnostic-status">Stable</dd></div>
+          </dl>
+        </section>
+
+        <section class="control-section selected">
+          <div class="section-heading"><span>Selected Body</span></div>
+          <div id="selected-body">
+            <strong>Sun</strong>
+            <span>Search for or click a body to inspect it.</span>
+          </div>
+          <button id="stop-follow" type="button" hidden>Stop Following</button>
+        </section>
+
+        <section class="control-section dataset">
+          <div class="section-heading"><span>Dataset</span></div>
+          <dl>
+            <div><dt>Source</dt><dd id="dataset-source"></dd></div>
+            <div><dt>Epoch</dt><dd id="dataset-epoch"></dd></div>
+            <div><dt>Frame</dt><dd id="dataset-frame"></dd></div>
+            <div><dt>Notes</dt><dd id="dataset-notes"></dd></div>
+          </dl>
+        </section>
+
+        <footer>
+          SI-unit N-body simulation &middot; Planet and small-body elements from NASA/JPL
+        </footer>
+      </aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

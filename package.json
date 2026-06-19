@@ -11,6 +11,7 @@
     "test:all": "npm run typecheck && npm test && npm run build && npm run test:e2e",
     "test:watch": "vitest",
     "build:launcher": "powershell -ExecutionPolicy Bypass -File tools/build-launcher.ps1",
+    "build:wallpaper": "powershell -ExecutionPolicy Bypass -File tools/build-lively-wallpaper.ps1",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {

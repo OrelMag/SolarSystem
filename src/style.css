@@ -43,6 +43,10 @@ select {
   height: 100vh;
 }
 
+body.wallpaper-mode #app {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .viewport {
   position: relative;
   min-width: 0;
@@ -125,6 +129,16 @@ dt,
   overflow-y: auto;
   border-left: 1px solid #1b202b;
   background: rgba(10, 13, 20, 0.97);
+}
+
+body.wallpaper-mode .panel,
+body.wallpaper-mode .brand,
+body.wallpaper-mode .hint {
+  display: none;
+}
+
+body.wallpaper-mode #scene canvas {
+  pointer-events: none;
 }
 
 .control-section {

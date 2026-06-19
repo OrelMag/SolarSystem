@@ -104,6 +104,9 @@ const DIAGNOSTIC_INTERVAL_SECONDS = 30 * DAY_SECONDS;
 const SELECTED_BODY_REFRESH_INTERVAL_MS = 1_000;
 const ENERGY_WARNING_DRIFT = 5e-5;
 const ANGULAR_WARNING_DRIFT = 5e-5;
+const WALLPAPER_MODE =
+  new URLSearchParams(window.location.search).get("wallpaper") === "inner" ||
+  window.location.pathname.endsWith("/wallpaper.html");
 
 const GROUP_LABELS: Readonly<Partial<Record<NavigatorCategory, string>>> = {
   star: "Star",
@@ -271,6 +274,18 @@ for (const scenario of SCENARIOS) {
   option.value = scenario.id;
   option.textContent = scenario.label;
   scenarioSelect.append(option);
+}
+
+if (WALLPAPER_MODE) {
+  document.body.classList.add("wallpaper-mode");
+  scenarioSelect.value = "inner-planets";
+  viewFrameSelect.value = "sun-centered";
+  mainBeltInput.checked = true;
+  kuiperBeltInput.checked = false;
+  cometsInput.checked = false;
+  moonsInput.checked = false;
+  labelsInput.checked = true;
+  planetPathsInput.checked = true;
 }
 
 let currentScenario = findScenario(scenarioSelect.value || "full-solar-system");
@@ -1329,6 +1344,10 @@ renderer.selectBody(selectedBodyId);
 renderer.focusBody(selectedBodyId, false);
 renderer.update(getDisplayBodies(), orbitalStates, 0);
 renderer.updateBarycenter(calculateCenterOfMass(simulation.bodies));
+if (WALLPAPER_MODE) {
+  renderer.stopFollowing();
+  renderer.fitInnerSystem();
+}
 renderSelectedBody(true);
 renderLaunchTargets();
 renderNavigator();
