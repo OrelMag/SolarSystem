@@ -100,7 +100,7 @@ function buildMassiveDetail(
     title: body.name,
     rows,
     note: body.category === "spacecraft"
-      ? "This launched spacecraft is an active N-body participant with negligible mission mass. It follows gravity after its initial injection."
+      ? "This launched spacecraft is a mission marker with negligible mass. While en route it participates in N-body gravity; after arrival it docks with the destination."
       : facts?.significance ??
         "This physical body participates directly in the N-body integration.",
   };

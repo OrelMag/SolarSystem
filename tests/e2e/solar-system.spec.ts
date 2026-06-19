@@ -52,3 +52,15 @@ test("keeps mobile controls reachable with collapsed secondary sections", async 
   await expect(page.locator("#physics-time")).toBeVisible();
   await expect(page.locator("#visible-objects")).toBeVisible();
 });
+
+test("launches a spacecraft toward a planet", async ({ page }) => {
+  await page.goto("/");
+
+  await page.locator("#launch-target").selectOption("mars");
+  await page.locator("#launch-spacecraft").click();
+
+  await expect(page.locator("#launch-status")).toHaveText("EN ROUTE");
+  await expect(page.locator("#selected-body")).toContainText("Spacecraft");
+  await page.locator("#body-search").fill("Spacecraft");
+  await expect(page.locator("#body-results").getByRole("option", { name: /Spacecraft/i })).toBeVisible();
+});

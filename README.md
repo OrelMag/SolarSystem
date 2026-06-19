@@ -18,6 +18,16 @@ npm run dev
 
 Then open the local URL printed by Vite.
 
+On Windows, you can also launch the simulation with:
+
+```sh
+.\SolarSystem.exe
+```
+
+The launcher starts the Vite server on `http://127.0.0.1:5173/`, opens the
+browser, and stops the server when its console window is closed. Rebuild it with
+`npm run build:launcher` after changing `tools/SolarSystemLauncher.cs`.
+
 ## Verify
 
 ```sh
@@ -92,7 +102,7 @@ and mobile collapsed controls.
 - Expand all displayed distances up to 8x for readability without changing any
   physical state or orbital calculation. Both framing controls account for the
   selected scale.
-- Toggle the barycenter marker to see the current center of mass in the active
+- Toggle the center-of-mass marker to see the current barycenter in the active
   view frame.
 
 Distance scaling, body marker scaling, camera pan, and zoom are visual
@@ -107,7 +117,7 @@ or the gravity calculation.
 - Physics/data modules remain free of rendering, UI, app, Three.js, and DOM
   dependencies.
 - Pan, zoom, labels, trails, pause/resume, reset, speed controls, diagnostics,
-  barycenter overlay, and mobile controls work in browser smoke tests.
+  optional center-of-mass marker, and mobile controls work in browser smoke tests.
 - `npm run test:all` passes before tagging or shipping.
 
 See [AGENTS.md](./AGENTS.md) for architecture, extension, and validation rules.

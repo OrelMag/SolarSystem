@@ -132,7 +132,7 @@ export class SolarSystemRenderer {
   private cometTailsVisible = true;
   private cometsVisible = true;
   private moonsVisible = true;
-  private barycenterVisible = true;
+  private barycenterVisible = false;
   private distanceScale: DistanceScaleConfig = DEFAULT_DISTANCE_SCALE;
   private viewFrame: ViewFrame = "barycentric";
   private viewFrameOriginM = { x: 0, y: 0, z: 0 };
@@ -180,7 +180,7 @@ export class SolarSystemRenderer {
 
     this.addBackground();
     this.barycenterMesh = this.createBarycenterMesh();
-    this.barycenterLabel = this.createLabel("Barycenter");
+    this.barycenterLabel = this.createLabel("Center of mass");
     this.createBodyViews(bodies);
     this.createOrbitalViews(orbitalBodies);
     this.createBeltViews(belts);
@@ -240,6 +240,7 @@ export class SolarSystemRenderer {
       if (!view) continue;
       const scenePosition = this.bodyToScenePosition(body, bodies);
       view.mesh.position.copy(scenePosition);
+      this.updateSpacecraftOrientation(body, bodies, view.mesh);
       if (this.usesLocalParentDisplay(body)) {
         const parent = body.parentId
           ? bodies.find((candidate) => candidate.id === body.parentId)
@@ -613,10 +614,12 @@ export class SolarSystemRenderer {
 
   private createBodyView(body: Readonly<MutableBodyState>): void {
     const visibleRadius = calculatePhysicalMarkerRadius(body.category, body.radiusM);
-    const mesh = this.createDisc(body.id, visibleRadius, body.visual.color);
+    const mesh =
+      body.category === "spacecraft"
+        ? this.createRocketMarker(body.id, visibleRadius, body.visual.color)
+        : this.createDisc(body.id, visibleRadius, body.visual.color);
     mesh.userData.category = body.category;
     mesh.userData.parentId = body.parentId;
-    if (body.id === "sun") this.addSunGlow(mesh, body.visual.emissive ?? body.visual.color);
     if (body.id === "saturn") this.addSaturnRing(mesh, visibleRadius);
     const label = this.createLabel(body.name);
     const trailOpacity = body.category === "star" ? 0.08 : body.category === "spacecraft" ? 0.55 : 0.28;
@@ -808,6 +811,32 @@ export class SolarSystemRenderer {
     return this.toScenePosition(parent.positionM).add(
       this.toLocalSceneOffset(subtract(body.positionM, parent.positionM)),
     );
+  }
+
+  private updateSpacecraftOrientation(
+    body: Readonly<MutableBodyState>,
+    bodies: readonly Readonly<MutableBodyState>[],
+    mesh: THREE.Mesh,
+  ): void {
+    if (body.category !== "spacecraft") return;
+    const parent = body.parentId
+      ? bodies.find((candidate) => candidate.id === body.parentId)
+      : undefined;
+    const relativeVelocity = parent
+      ? subtract(body.velocityMps, parent.velocityMps)
+      : body.velocityMps;
+    const velocityLengthSquared =
+      relativeVelocity.x ** 2 + relativeVelocity.y ** 2 + relativeVelocity.z ** 2;
+    const heading =
+      velocityLengthSquared > 0 && Number.isFinite(velocityLengthSquared)
+        ? relativeVelocity
+        : parent
+          ? subtract(body.positionM, parent.positionM)
+          : undefined;
+    if (!heading) return;
+    const planarLengthSquared = heading.x ** 2 + heading.y ** 2;
+    if (!(planarLengthSquared > 0) || !Number.isFinite(planarLengthSquared)) return;
+    mesh.rotation.z = Math.atan2(heading.y, heading.x);
   }
 
   private toLocalSceneOffset(positionM: {
@@ -1114,6 +1143,65 @@ export class SolarSystemRenderer {
     return mesh;
   }
 
+  private createRocketMarker(id: string, radius: number, color: number): THREE.Mesh {
+    const bodyShape = new THREE.Shape();
+    bodyShape.moveTo(radius * 1.15, 0);
+    bodyShape.lineTo(radius * 0.42, radius * 0.42);
+    bodyShape.lineTo(radius * -0.58, radius * 0.32);
+    bodyShape.lineTo(radius * -0.92, radius * 0.64);
+    bodyShape.lineTo(radius * -0.78, radius * 0.16);
+    bodyShape.lineTo(radius * -1.12, 0);
+    bodyShape.lineTo(radius * -0.78, radius * -0.16);
+    bodyShape.lineTo(radius * -0.92, radius * -0.64);
+    bodyShape.lineTo(radius * -0.58, radius * -0.32);
+    bodyShape.lineTo(radius * 0.42, radius * -0.42);
+    bodyShape.closePath();
+
+    const mesh = new THREE.Mesh(
+      new THREE.ShapeGeometry(bodyShape),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+      }),
+    );
+    const window = new THREE.Mesh(
+      new THREE.CircleGeometry(radius * 0.16, 16),
+      new THREE.MeshBasicMaterial({
+        color: 0xf0f7ff,
+        transparent: true,
+        opacity: 0.95,
+        side: THREE.DoubleSide,
+      }),
+    );
+    window.position.set(radius * 0.36, 0, 0.001);
+    const flameShape = new THREE.Shape();
+    flameShape.moveTo(radius * -1.08, radius * 0.16);
+    flameShape.lineTo(radius * -1.55, 0);
+    flameShape.lineTo(radius * -1.08, radius * -0.16);
+    flameShape.closePath();
+    const flame = new THREE.Mesh(
+      new THREE.ShapeGeometry(flameShape),
+      new THREE.MeshBasicMaterial({
+        color: 0xffb36b,
+        transparent: true,
+        opacity: 0.78,
+        side: THREE.DoubleSide,
+      }),
+    );
+    mesh.add(window, flame);
+    mesh.userData.bodyId = id;
+    mesh.userData.baseVisible = true;
+    mesh.userData.hiddenByDeclutter = false;
+    mesh.userData.labelHiddenByDeclutter = false;
+    mesh.renderOrder = 4;
+    window.renderOrder = 4;
+    flame.renderOrder = 3;
+    this.scene.add(mesh);
+    return mesh;
+  }
+
   private createLabel(text: string): HTMLDivElement {
     const label = document.createElement("div");
     label.className = "body-label";
@@ -1144,6 +1232,7 @@ export class SolarSystemRenderer {
     );
     mesh.userData.renderRadiusPx = 5;
     mesh.renderOrder = 5;
+    mesh.visible = false;
     this.scene.add(mesh);
     return mesh;
   }
@@ -1160,15 +1249,6 @@ export class SolarSystemRenderer {
         }
       }
     });
-  }
-
-  private addSunGlow(mesh: THREE.Mesh, color: number): void {
-    const glow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.42, 40),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.13 }),
-    );
-    glow.renderOrder = 0;
-    mesh.add(glow);
   }
 
   private addSaturnRing(mesh: THREE.Mesh, radius: number): void {

@@ -1,8 +1,19 @@
 import type { HierarchicalBodyState, OrbitalBodyCategory } from "../domain/orbits";
 import type { BodyCategory, MutableBodyState } from "../domain/types";
-import { magnitude, subtract } from "../domain/vector";
+import {
+  add,
+  magnitude,
+  scale,
+  subtract,
+  vector,
+  type Vector3,
+} from "../domain/vector";
 import type { LaunchTargetState, SpacecraftLaunch } from "../physics/launch";
-import { ACTIVE_SPACECRAFT_ID } from "../physics/launch";
+import {
+  ACTIVE_SPACECRAFT_ID,
+  SPACECRAFT_MASS_KG,
+  SPACECRAFT_RADIUS_M,
+} from "../physics/launch";
 import type { SpacecraftGuidanceMode } from "../physics/guidance";
 
 export type LaunchTargetCategory = Extract<
@@ -32,6 +43,7 @@ export interface LaunchMissionState {
 }
 
 const ARRIVAL_FLOOR_M = 25_000_000;
+export const SPACECRAFT_DOCKING_STANDOFF_M = 2_000_000;
 
 export function createLaunchTargetOptions(input: {
   readonly bodies: readonly Readonly<MutableBodyState>[];
@@ -164,7 +176,28 @@ export function updateLaunchMissionGuidanceMode(
 }
 
 export function calculateArrivalThresholdM(target: Pick<LaunchTargetState, "radiusM">): number {
-  return Math.max(target.radiusM, ARRIVAL_FLOOR_M);
+  return Math.max(target.radiusM + SPACECRAFT_DOCKING_STANDOFF_M, ARRIVAL_FLOOR_M);
+}
+
+export function createDockedSpacecraftBody(input: {
+  readonly target: Pick<LaunchTargetState, "id" | "radiusM" | "positionM" | "velocityMps">;
+  readonly approachDirectionM?: Vector3;
+}): MutableBodyState {
+  const direction = unitOrFallback(input.approachDirectionM ?? vector(1, 0, 0));
+  return {
+    id: ACTIVE_SPACECRAFT_ID,
+    name: "Spacecraft",
+    category: "spacecraft",
+    parentId: input.target.id,
+    massKg: SPACECRAFT_MASS_KG,
+    radiusM: SPACECRAFT_RADIUS_M,
+    positionM: add(
+      input.target.positionM,
+      scale(direction, input.target.radiusM + SPACECRAFT_DOCKING_STANDOFF_M),
+    ),
+    velocityMps: { ...input.target.velocityMps },
+    visual: { color: 0x8ee8ff },
+  };
 }
 
 function isLaunchTargetCategory(
@@ -177,4 +210,10 @@ function targetCategoryRank(category: LaunchTargetCategory): number {
   if (category === "planet") return 0;
   if (category === "dwarf-planet") return 1;
   return 2;
+}
+
+function unitOrFallback(value: Vector3): Vector3 {
+  const length = magnitude(value);
+  if (length > 0 && Number.isFinite(length)) return scale(value, 1 / length);
+  return vector(1, 0, 0);
 }

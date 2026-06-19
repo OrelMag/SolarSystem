@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HierarchicalBodyState } from "../domain/orbits";
 import type { MutableBodyState } from "../domain/types";
-import { vector } from "../domain/vector";
+import { magnitude, subtract, vector } from "../domain/vector";
 import type { SpacecraftLaunch } from "../physics/launch";
 import {
   ACTIVE_SPACECRAFT_ID,
@@ -9,6 +9,9 @@ import {
   SPACECRAFT_RADIUS_M,
 } from "../physics/launch";
 import {
+  SPACECRAFT_DOCKING_STANDOFF_M,
+  calculateArrivalThresholdM,
+  createDockedSpacecraftBody,
   createLaunchMissionState,
   createLaunchTargetOptions,
   findLaunchTargetState,
@@ -140,5 +143,76 @@ describe("launch mission helpers", () => {
     expect(closer.guidanceMode).toBe("guided");
     expect(farther.closestApproachM).toBe(30_000_000);
     expect(farther.status).toBe("missed");
+  });
+
+  it("keeps an arrived mission arrived instead of later marking it missed", () => {
+    const launch: SpacecraftLaunch = {
+      spacecraft: body({ id: ACTIVE_SPACECRAFT_ID, category: "spacecraft", x: 0 }),
+      targetId: "mars",
+      targetName: "Mars",
+      transferKind: "interplanetary",
+      estimatedTransferSeconds: 100,
+      launchDistanceM: 1,
+      targetDistanceAtLaunchM: 100_000_001,
+      injectionSpeedMps: 10,
+    };
+    const mission = createLaunchMissionState({
+      launch,
+      target: { radiusM: 1 },
+      elapsedSeconds: 0,
+    });
+    const arrived = updateLaunchMissionState({
+      mission,
+      bodies: [
+        body({ id: ACTIVE_SPACECRAFT_ID, category: "spacecraft", x: 95_000_000 }),
+        body({ id: "mars", category: "planet", x: 100_000_000, radiusM: 1 }),
+      ],
+      orbitalStates: [],
+      elapsedSeconds: 50,
+    });
+    const later = updateLaunchMissionState({
+      mission: arrived,
+      bodies: [
+        body({ id: ACTIVE_SPACECRAFT_ID, category: "spacecraft", x: 0 }),
+        body({ id: "mars", category: "planet", x: 100_000_000, radiusM: 1 }),
+      ],
+      orbitalStates: [],
+      elapsedSeconds: 1_000,
+    });
+
+    expect(arrived.status).toBe("arrived");
+    expect(later.status).toBe("arrived");
+    expect(later.guidanceMode).toBe("station-keeping");
+  });
+
+  it("includes the docking standoff in arrival threshold", () => {
+    expect(calculateArrivalThresholdM({ radiusM: 80_000_000 })).toBe(
+      80_000_000 + SPACECRAFT_DOCKING_STANDOFF_M,
+    );
+    expect(calculateArrivalThresholdM({ radiusM: 1 })).toBe(25_000_000);
+  });
+
+  it("creates a finite docked spacecraft display body outside the target", () => {
+    const target = {
+      id: "mars",
+      radiusM: 3_389_500,
+      positionM: vector(10, 20, 30),
+      velocityMps: vector(1, 2, 3),
+    };
+    const docked = createDockedSpacecraftBody({
+      target,
+      approachDirectionM: vector(0, 10, 0),
+    });
+
+    expect(docked.id).toBe(ACTIVE_SPACECRAFT_ID);
+    expect(docked.category).toBe("spacecraft");
+    expect(docked.parentId).toBe("mars");
+    expect(docked.velocityMps).toEqual(target.velocityMps);
+    expect(magnitude(subtract(docked.positionM, target.positionM))).toBe(
+      target.radiusM + SPACECRAFT_DOCKING_STANDOFF_M,
+    );
+    expect(Number.isFinite(docked.positionM.x)).toBe(true);
+    expect(Number.isFinite(docked.positionM.y)).toBe(true);
+    expect(Number.isFinite(docked.positionM.z)).toBe(true);
   });
 });

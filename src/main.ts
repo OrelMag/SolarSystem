@@ -16,6 +16,7 @@ import {
   type GifExportEstimate,
 } from "./app/gifExport";
 import {
+  createDockedSpacecraftBody,
   createLaunchMissionState,
   createLaunchTargetOptions,
   findLaunchTargetState,
@@ -66,7 +67,8 @@ import {
   createScenarioSimulation,
 } from "./app/simulationSession";
 import type { HierarchicalOrbitalBody } from "./domain/orbits";
-import { magnitude } from "./domain/vector";
+import type { MutableBodyState } from "./domain/types";
+import { magnitude, subtract, type Vector3 } from "./domain/vector";
 import {
   calculateConservedQuantities,
   relativeDrift,
@@ -263,6 +265,8 @@ let simulation = createScenarioSimulation(
 let orbitalDefinitions = currentScenario.displayOnlyOrbitalBodies;
 let orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
 let visualSettings: VisualBodyScaleSettings = loadVisualSettings(window.localStorage);
+let dockedSpacecraft: MutableBodyState | undefined;
+let dockedSpacecraftDirectionM: Vector3 | undefined;
 let renderer = createRenderer();
 let running = true;
 let accumulatorSeconds = 0;
@@ -274,7 +278,7 @@ let latestConserved: ConservedQuantities = initialConserved;
 let lastDiagnosticsElapsed = Number.NEGATIVE_INFINITY;
 let diagnosticsHistory = new DiagnosticsHistory();
 let namesById = buildNamesById();
-let navigatorEntries = createNavigatorEntries(simulation.bodies, orbitalDefinitions, namesById);
+let navigatorEntries = createNavigatorEntries(getDisplayBodies(), orbitalDefinitions, namesById);
 let selectedBodyId = currentScenario.defaultTargetId;
 let selectedBodyRefreshSnapshot: SelectedBodyRefreshSnapshot | undefined;
 let launchMission: LaunchMissionState | undefined;
@@ -294,7 +298,7 @@ function createRenderer(): SolarSystemRenderer {
   const instance = new SolarSystemRenderer(
     sceneElement,
     labelsElement,
-    simulation.bodies,
+    getDisplayBodies(),
     orbitalDefinitions,
     currentScenario.belts,
     sun.massKg,
@@ -307,9 +311,43 @@ function createRenderer(): SolarSystemRenderer {
   return instance;
 }
 
+function getDisplayBodies(): readonly Readonly<MutableBodyState>[] {
+  return dockedSpacecraft ? [...simulation.bodies, dockedSpacecraft] : simulation.bodies;
+}
+
+function getDisplayBodiesFor(
+  bodies: readonly Readonly<MutableBodyState>[],
+  orbitalStatesForBodies: typeof orbitalStates,
+): readonly Readonly<MutableBodyState>[] {
+  const docked = createDockedSpacecraftFor(bodies, orbitalStatesForBodies);
+  return docked ? [...bodies, docked] : bodies;
+}
+
+function createDockedSpacecraftFor(
+  bodies: readonly Readonly<MutableBodyState>[],
+  orbitalStatesForBodies: typeof orbitalStates,
+): MutableBodyState | undefined {
+  if (!dockedSpacecraft || !launchMission) return undefined;
+  const target = findLaunchTargetState({
+    id: launchMission.targetId,
+    bodies,
+    orbitalStates: orbitalStatesForBodies,
+  });
+  if (!target) return undefined;
+  return createDockedSpacecraftBody({
+    target,
+    approachDirectionM: dockedSpacecraftDirectionM,
+  });
+}
+
+function refreshDockedSpacecraftDisplay(): void {
+  const nextDockedSpacecraft = createDockedSpacecraftFor(simulation.bodies, orbitalStates);
+  if (nextDockedSpacecraft) dockedSpacecraft = nextDockedSpacecraft;
+}
+
 function buildNamesById(): Map<string, string> {
   return new Map<string, string>([
-    ...simulation.bodies.map((body) => [body.id, body.name] as const),
+    ...getDisplayBodies().map((body) => [body.id, body.name] as const),
     ...currentScenario.physicalOrbitalBodies.map((body) => [body.id, body.name] as const),
     ...orbitalDefinitions.map((body) => [body.id, body.name] as const),
   ]);
@@ -320,12 +358,15 @@ function hasEarth(): boolean {
 }
 
 function hasActiveSpacecraft(): boolean {
-  return simulation.bodies.some((body) => body.id === ACTIVE_SPACECRAFT_ID);
+  return (
+    dockedSpacecraft !== undefined ||
+    simulation.bodies.some((body) => body.id === ACTIVE_SPACECRAFT_ID)
+  );
 }
 
 function refreshCatalog(): void {
   namesById = buildNamesById();
-  navigatorEntries = createNavigatorEntries(simulation.bodies, orbitalDefinitions, namesById);
+  navigatorEntries = createNavigatorEntries(getDisplayBodies(), orbitalDefinitions, namesById);
   renderLaunchTargets();
 }
 
@@ -457,13 +498,15 @@ function renderSelectedBody(force = false): void {
     return;
   }
 
+  const displayBodies = getDisplayBodies();
   const accelerations = calculateAccelerations(simulation.bodies, COLLISION_POLICY);
   const accelerationsById = new Map(
     simulation.bodies.map((body, index) => [body.id, accelerations[index] ?? { x: 0, y: 0, z: 0 }] as const),
   );
+  if (dockedSpacecraft) accelerationsById.set(ACTIVE_SPACECRAFT_ID, { x: 0, y: 0, z: 0 });
   const detail = buildSelectedBodyDetail({
     id: selectedBodyId,
-    massiveBodies: simulation.bodies,
+    massiveBodies: displayBodies,
     orbitalStates,
     namesById,
     accelerationsById,
@@ -558,9 +601,12 @@ function resetDiagnostics(): void {
 }
 
 function clearActiveSpacecraft(selectFallback: boolean): void {
+  const removedDockedSpacecraft = dockedSpacecraft !== undefined;
+  dockedSpacecraft = undefined;
+  dockedSpacecraftDirectionM = undefined;
   const removedFromSimulation = simulation.removeRuntimeBody(ACTIVE_SPACECRAFT_ID);
   const removedFromRenderer = renderer.removeBody(ACTIVE_SPACECRAFT_ID);
-  if (!removedFromSimulation && !removedFromRenderer && !launchMission) return;
+  if (!removedDockedSpacecraft && !removedFromSimulation && !removedFromRenderer && !launchMission) return;
   launchMission = undefined;
   launchInjectionSpeedMps = undefined;
   if (selectedBodyId === ACTIVE_SPACECRAFT_ID && selectFallback) {
@@ -619,13 +665,13 @@ function launchSpacecraft(): void {
   accumulatorSeconds = 0;
   resetDiagnostics();
   refreshCatalog();
-  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
+  renderer.update(getDisplayBodies(), orbitalStates, simulation.elapsedSeconds);
   selectAndFollow(ACTIVE_SPACECRAFT_ID);
   renderLaunchPanel();
 }
 
 function applyLaunchGuidance(): void {
-  if (!launchMission || launchMission.status === "missed") return;
+  if (!launchMission || launchMission.status !== "en-route") return;
   const spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);
   const target = findLaunchTargetState({
     id: launchMission.targetId,
@@ -647,6 +693,39 @@ function applyLaunchGuidance(): void {
   launchMission = updateLaunchMissionGuidanceMode(launchMission, guidance.mode);
 }
 
+function dockArrivedSpacecraft(): void {
+  if (!launchMission || launchMission.status !== "arrived" || dockedSpacecraft) return;
+  const spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);
+  const target = findLaunchTargetState({
+    id: launchMission.targetId,
+    bodies: simulation.bodies,
+    orbitalStates,
+  });
+  if (!spacecraft || !target) return;
+
+  const spacecraftWasSelected = selectedBodyId === ACTIVE_SPACECRAFT_ID;
+  dockedSpacecraftDirectionM = subtract(spacecraft.positionM, target.positionM);
+  dockedSpacecraft = createDockedSpacecraftBody({
+    target,
+    approachDirectionM: dockedSpacecraftDirectionM,
+  });
+  simulation.removeRuntimeBody(ACTIVE_SPACECRAFT_ID);
+  renderer.removeBody(ACTIVE_SPACECRAFT_ID);
+  renderer.addBody(dockedSpacecraft);
+  if (spacecraftWasSelected) {
+    renderer.selectBody(ACTIVE_SPACECRAFT_ID);
+    renderer.focusBody(ACTIVE_SPACECRAFT_ID, true);
+  } else {
+    renderer.selectBody(selectedBodyId);
+  }
+  resetDiagnostics();
+  refreshCatalog();
+  renderSelectedBody(true);
+  updateManualScaleControls();
+  renderNavigator();
+  updateGifExportHint();
+}
+
 function resetCurrentScenario(): void {
   clearActiveSpacecraft(false);
   simulation.reset();
@@ -658,7 +737,7 @@ function resetCurrentScenario(): void {
   launchInjectionSpeedMps = undefined;
   refreshCatalog();
   renderer.clearTrails();
-  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
+  renderer.update(getDisplayBodies(), orbitalStates, simulation.elapsedSeconds);
   renderer.selectBody(selectedBodyId);
   renderer.stopFollowing();
   renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
@@ -681,6 +760,8 @@ function switchScenario(id: string): void {
   orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
   launchMission = undefined;
   launchInjectionSpeedMps = undefined;
+  dockedSpacecraft = undefined;
+  dockedSpacecraftDirectionM = undefined;
   selectedBodyId = currentScenario.defaultTargetId;
   accumulatorSeconds = 0;
   activeNavigatorIndex = 0;
@@ -705,7 +786,7 @@ function switchScenario(id: string): void {
   renderer.setLabelsVisible(labelsInput.checked);
   resetDiagnostics();
   updateDatasetPanel();
-  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
+  renderer.update(getDisplayBodies(), orbitalStates, simulation.elapsedSeconds);
   renderer.selectBody(selectedBodyId);
   renderer.focusBody(selectedBodyId, false);
   renderSelectedBody(true);
@@ -846,11 +927,15 @@ async function exportCurrentViewGif(): Promise<void> {
     fixedTimestepSeconds: simulation.fixedTimestepSeconds,
     collisionPolicy: COLLISION_POLICY,
   });
+  const initialExportOrbitalStates = calculateScenarioOrbitalStates(
+    orbitalDefinitions,
+    exportSimulation,
+  );
   const stage = createExportStage(options.outputWidthPx, options.outputHeightPx);
   const exportRenderer = new SolarSystemRenderer(
     stage.container,
     stage.labels,
-    exportSimulation.bodies,
+    getDisplayBodiesFor(exportSimulation.bodies, initialExportOrbitalStates),
     orbitalDefinitions,
     currentScenario.belts,
     exportSimulation.bodies.find((body) => body.id === "sun")?.massKg ??
@@ -888,7 +973,7 @@ async function exportCurrentViewGif(): Promise<void> {
         exportSimulation,
       );
       exportRenderer.update(
-        exportSimulation.bodies,
+        getDisplayBodiesFor(exportSimulation.bodies, exportOrbitalStates),
         exportOrbitalStates,
         exportSimulation.elapsedSeconds,
       );
@@ -1142,6 +1227,7 @@ function frame(now: number): void {
       stepsThisFrame < maxStepsPerFrame
     ) {
       applyLaunchGuidance();
+      dockArrivedSpacecraft();
       simulation.step();
       accumulatorSeconds -= simulation.fixedTimestepSeconds;
       stepsThisFrame += 1;
@@ -1154,15 +1240,18 @@ function frame(now: number): void {
   }
   const renderStartMs = performance.now();
   orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
+  refreshDockedSpacecraftDisplay();
   if (launchMission) {
     launchMission = updateLaunchMissionState({
       mission: launchMission,
-      bodies: simulation.bodies,
+      bodies: getDisplayBodies(),
       orbitalStates,
       elapsedSeconds: simulation.elapsedSeconds,
     });
+    dockArrivedSpacecraft();
+    refreshDockedSpacecraftDisplay();
   }
-  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
+  renderer.update(getDisplayBodies(), orbitalStates, simulation.elapsedSeconds);
   renderer.updateBarycenter(calculateCenterOfMass(simulation.bodies));
   renderer.render();
   const renderStats = renderer.getStats();
@@ -1191,7 +1280,7 @@ applyVisualSettingsToRenderer();
 applyLayerSettingsToRenderer();
 renderer.selectBody(selectedBodyId);
 renderer.focusBody(selectedBodyId, false);
-renderer.update(simulation.bodies, orbitalStates, 0);
+renderer.update(getDisplayBodies(), orbitalStates, 0);
 renderer.updateBarycenter(calculateCenterOfMass(simulation.bodies));
 renderSelectedBody(true);
 renderLaunchTargets();
