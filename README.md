@@ -48,7 +48,7 @@ npm run test:all
 - SI units throughout the domain and physics layers
 - Symmetric pairwise Newtonian gravity
 - Fixed five-minute velocity-Verlet integration step
-- Selectable JPL approximate-element and Horizons Cartesian datasets
+- Selectable JPL approximate-element, Horizons planets, and Horizons extended datasets
 - Barycentric correction for the approximate dataset's initial Sun state
 - Independent physical distance, visible body radius, and camera scales
 - Explicit minimum-distance collision policy with structured simulation errors
@@ -56,7 +56,7 @@ npm run test:all
 - 6,000 deterministic, massless Keplerian belt particles
 - JPL orbital elements for Halley, Hale-Bopp, Encke, and 67P
 - Distance-responsive anti-solar comet tails
-- Physical N-body integration for Pluto and 12 major moons
+- Physical N-body integration for Pluto and 12 major moons, including a common-epoch Horizons extended scenario
 - Hierarchical parent-relative propagation for display-only comets
 - Structured discovery, gravity, orbital, and significance facts
 
@@ -68,6 +68,9 @@ for J2000.0 TDB, centered on the Solar System barycenter in the ecliptic of
 J2000.0 reference frame. Horizons positions are stored from source kilometres
 and velocities from kilometres per second, then converted to SI units at load
 time.
+The Horizons Extended scenario uses the same query settings for Pluto and the
+12 physical major moons, so those bodies start from a common Cartesian epoch
+instead of parent-relative approximate elements.
 
 The simulation is educational: it models mutual Newtonian gravity for the Sun,
 eight planets, Pluto, and 12 major moons, but does not include relativistic

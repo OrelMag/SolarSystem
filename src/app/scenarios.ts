@@ -9,6 +9,10 @@ import {
   createHorizonsSolarSystem,
   HORIZONS_SOLAR_DATASET_METADATA,
 } from "../data/horizonsSolarSystem";
+import {
+  createHorizonsExtendedSolarSystem,
+  HORIZONS_EXTENDED_SOLAR_DATASET_METADATA,
+} from "../data/horizonsExtendedSolarSystem";
 import type {
   HierarchicalOrbitalBody,
   OrbitalParticle,
@@ -19,7 +23,11 @@ import { scale, vector } from "../domain/vector";
 import { ASTRONOMICAL_UNIT_M, DAY_SECONDS } from "../physics/constants";
 
 export interface ScenarioMetadata {
-  readonly datasetId: "jpl-approximate-j2000" | "jpl-horizons-cartesian-j2000" | "analytic-two-body-validation";
+  readonly datasetId:
+    | "jpl-approximate-j2000"
+    | "jpl-horizons-cartesian-j2000"
+    | "jpl-horizons-extended-cartesian-j2000"
+    | "analytic-two-body-validation";
   readonly source: string;
   readonly sourceUrl: string;
   readonly epoch: string;
@@ -38,6 +46,7 @@ export interface ScenarioDefinition {
   readonly id:
     | "full-solar-system"
     | "horizons-solar-system"
+    | "horizons-extended-system"
     | "inner-planets"
     | "outer-planets"
     | "two-body-validation";
@@ -169,6 +178,27 @@ export const SCENARIOS: readonly ScenarioDefinition[] = [
     physicalOrbitalBodies: [],
     displayOnlyOrbitalBodies: [],
     belts: [],
+  },
+  {
+    id: "horizons-extended-system",
+    label: "Horizons Extended",
+    description:
+      "Horizons Cartesian vectors for the Sun, eight planets, Pluto, and 12 major moons.",
+    defaultTargetId: "sun",
+    metadata: {
+      datasetId: HORIZONS_EXTENDED_SOLAR_DATASET_METADATA.datasetId,
+      source: HORIZONS_EXTENDED_SOLAR_DATASET_METADATA.source,
+      sourceUrl: HORIZONS_EXTENDED_SOLAR_DATASET_METADATA.sourceUrl,
+      epoch: HORIZONS_EXTENDED_SOLAR_DATASET_METADATA.epoch,
+      referenceFrame: HORIZONS_EXTENDED_SOLAR_DATASET_METADATA.referenceFrame,
+      originalUnits: HORIZONS_EXTENDED_SOLAR_DATASET_METADATA.originalUnits,
+      conversionApplied: HORIZONS_EXTENDED_SOLAR_DATASET_METADATA.conversionApplied,
+      notes: HORIZONS_EXTENDED_SOLAR_DATASET_METADATA.notes,
+    },
+    createBodies: createHorizonsExtendedSolarSystem,
+    physicalOrbitalBodies: PHYSICAL_ORBITAL_BODIES,
+    displayOnlyOrbitalBodies: COMETS,
+    belts: allBelts(),
   },
   {
     id: "inner-planets",

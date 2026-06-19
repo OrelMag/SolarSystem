@@ -18,6 +18,8 @@ describe("selected body details", () => {
     });
     expect(detail?.title).toBe("Earth");
     expect(detail?.rows.map((row) => row.label)).toContain("Acceleration");
+    expect(detail?.rows.map((row) => row.label)).toContain("Orbital period estimate");
+    expect(detail?.rows.map((row) => row.label)).toContain("Periapsis estimate");
     expect(detail?.note).toContain("life");
   });
 

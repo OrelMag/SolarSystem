@@ -1,12 +1,15 @@
 import { MASSIVE_BODY_FACTS } from "../data/bodyFacts";
 import type { HierarchicalBodyState } from "../domain/orbits";
 import type { MutableBodyState } from "../domain/types";
-import { magnitude, subtract, type Vector3 } from "../domain/vector";
+import { magnitude, type Vector3 } from "../domain/vector";
 import { PHYSICAL_ORBITAL_BODIES } from "../data/physicalSolarSystem";
 import { ASTRONOMICAL_UNIT_M, GRAVITATIONAL_CONSTANT } from "../physics/constants";
+import { calculateBodyScientificMetrics } from "../physics/bodyMetrics";
 import {
   formatAccelerationMps2,
   formatDistanceM,
+  formatDuration,
+  formatElapsed,
   formatMass,
   formatSpeedMps,
   formatVector,
@@ -48,10 +51,7 @@ function buildMassiveDetail(
   namesById: ReadonlyMap<string, string>,
   accelerationsById: ReadonlyMap<string, Vector3>,
 ): SelectedBodyDetail {
-  const sun = bodies.find((candidate) => candidate.id === "sun");
-  const parent = body.parentId
-    ? bodies.find((candidate) => candidate.id === body.parentId)
-    : undefined;
+  const metrics = calculateBodyScientificMetrics({ body, bodies });
   const facts =
     MASSIVE_BODY_FACTS[body.id] ??
     PHYSICAL_ORBITAL_BODIES.find((candidate) => candidate.id === body.id)?.facts;
@@ -69,22 +69,17 @@ function buildMassiveDetail(
       label:
         body.id === "sun"
           ? "Barycenter offset"
-          : parent
+          : body.parentId
             ? "Parent distance"
             : "Sun distance",
-      value: parent
-        ? formatDistanceM(magnitude(subtract(body.positionM, parent.positionM)))
-        : sun && body.id !== "sun"
-          ? formatDistanceM(magnitude(subtract(body.positionM, sun.positionM)))
-          : formatDistanceM(magnitude(body.positionM)),
+      value: formatDistanceM(metrics.distanceFromCentralM ?? magnitude(body.positionM)),
     },
     {
-      label: parent ? "Parent-relative speed" : "Speed",
-      value: formatSpeedMps(
-        magnitude(parent ? subtract(body.velocityMps, parent.velocityMps) : body.velocityMps),
-      ),
+      label: body.parentId ? "Parent-relative speed" : "Speed",
+      value: formatSpeedMps(metrics.relativeSpeedMps ?? metrics.barycentricSpeedMps),
     },
-    { label: "Barycentric speed", value: formatSpeedMps(magnitude(body.velocityMps)) },
+    { label: "Barycentric speed", value: formatSpeedMps(metrics.barycentricSpeedMps) },
+    ...orbitRows(metrics),
     { label: "Acceleration", value: formatAccelerationMps2(magnitude(acceleration)) },
     { label: "Position", value: formatVector(body.positionM, "m") },
     { label: "Velocity", value: formatVector(body.velocityMps, "m/s") },
@@ -104,6 +99,25 @@ function buildMassiveDetail(
       : facts?.significance ??
         "This physical body participates directly in the N-body integration.",
   };
+}
+
+function orbitRows(metrics: ReturnType<typeof calculateBodyScientificMetrics>): SelectedBodyDetail["rows"] {
+  if (
+    metrics.orbitalPeriodSeconds === undefined ||
+    metrics.periapsisM === undefined ||
+    metrics.apoapsisM === undefined
+  ) {
+    return [];
+  }
+  return [
+    { label: "Orbital period estimate", value: formatPeriod(metrics.orbitalPeriodSeconds) },
+    { label: "Periapsis estimate", value: formatDistanceM(metrics.periapsisM) },
+    { label: "Apoapsis estimate", value: formatDistanceM(metrics.apoapsisM) },
+  ];
+}
+
+function formatPeriod(seconds: number): string {
+  return seconds < 2 * 86_400 ? formatDuration(seconds) : formatElapsed(seconds);
 }
 
 function buildMasslessDetail(

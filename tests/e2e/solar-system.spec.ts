@@ -30,6 +30,21 @@ test("loads the simulation and exercises core controls", async ({ page }) => {
   await expect(page.locator("#selected-body")).toContainText("Sun");
 });
 
+test("loads the Horizons Extended scenario and selects physical extended bodies", async ({ page }) => {
+  await page.goto("/");
+
+  await page.locator("#scenario").selectOption("horizons-extended-system");
+  await expect(page.locator("#dataset-source")).toContainText("Horizons");
+
+  await page.locator("#body-search").fill("Pluto");
+  await page.locator("#body-results").getByRole("option", { name: /^Pluto\b/i }).click();
+  await expect(page.locator("#selected-body")).toContainText("Pluto");
+
+  await page.locator("#body-search").fill("Moon");
+  await page.locator("#body-results").getByRole("option", { name: /^Moon\b/i }).click();
+  await expect(page.locator("#selected-body")).toContainText("Moon");
+});
+
 test("keeps mobile controls reachable with collapsed secondary sections", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
   await page.goto("/");
