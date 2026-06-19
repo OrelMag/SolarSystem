@@ -21,6 +21,7 @@ import {
   scaleDistanceForDisplay,
   type DistanceScaleConfig,
 } from "./distanceScale";
+import { calculateBarycenterScenePosition } from "./barycenterOverlay";
 import { shouldShowCometVisual } from "./cometVisibility";
 import { shouldShowMoon } from "./moonVisibility";
 import { resolveViewFrameOrigin, type ViewFrame } from "./viewFrame";
@@ -50,6 +51,12 @@ export interface RendererFrameCaptureOptions {
 
 export interface SolarSystemRendererOptions {
   readonly pixelRatio?: number;
+}
+
+export interface RendererStats {
+  readonly bodyViewCount: number;
+  readonly orbitalViewCount: number;
+  readonly visibleObjectCount: number;
 }
 
 export interface RendererViewSnapshot {
@@ -113,6 +120,8 @@ export class SolarSystemRenderer {
   private readonly bodyViews = new Map<string, BodyView>();
   private readonly orbitalViews = new Map<string, OrbitalBodyView>();
   private readonly beltViews = new Map<string, BeltView>();
+  private readonly barycenterMesh: THREE.Mesh;
+  private readonly barycenterLabel: HTMLDivElement;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly resizeObserver: ResizeObserver;
@@ -123,6 +132,7 @@ export class SolarSystemRenderer {
   private cometTailsVisible = true;
   private cometsVisible = true;
   private moonsVisible = true;
+  private barycenterVisible = false;
   private distanceScale: DistanceScaleConfig = DEFAULT_DISTANCE_SCALE;
   private viewFrame: ViewFrame = "barycentric";
   private viewFrameOriginM = { x: 0, y: 0, z: 0 };
@@ -169,6 +179,8 @@ export class SolarSystemRenderer {
     this.controls.maxZoom = 300;
 
     this.addBackground();
+    this.barycenterMesh = this.createBarycenterMesh();
+    this.barycenterLabel = this.createLabel("Center of mass");
     this.createBodyViews(bodies);
     this.createOrbitalViews(orbitalBodies);
     this.createBeltViews(belts);
@@ -184,6 +196,29 @@ export class SolarSystemRenderer {
 
   onFollowChanged(handler: (id: string | undefined) => void): void {
     this.followChangeHandler = handler;
+  }
+
+  addBody(body: Readonly<MutableBodyState>): void {
+    if (this.bodyViews.has(body.id)) {
+      throw new Error(`Renderer already has a body view for "${body.id}".`);
+    }
+    this.createBodyView(body);
+    this.lastOrbitRefreshSeconds = Number.NEGATIVE_INFINITY;
+    this.updateMarkerSizes();
+  }
+
+  removeBody(id: string): boolean {
+    const view = this.bodyViews.get(id);
+    if (!view) return false;
+    this.scene.remove(view.mesh, view.trail, view.orbit);
+    this.disposeObject(view.mesh);
+    this.disposeObject(view.trail);
+    this.disposeObject(view.orbit);
+    view.label.remove();
+    this.bodyViews.delete(id);
+    if (this.followBodyId === id) this.setFollowBody(undefined);
+    this.lastOrbitRefreshSeconds = Number.NEGATIVE_INFINITY;
+    return true;
   }
 
   update(
@@ -205,7 +240,8 @@ export class SolarSystemRenderer {
       if (!view) continue;
       const scenePosition = this.bodyToScenePosition(body, bodies);
       view.mesh.position.copy(scenePosition);
-      if (body.category === "moon") {
+      this.updateSpacecraftOrientation(body, bodies, view.mesh);
+      if (this.usesLocalParentDisplay(body)) {
         const parent = body.parentId
           ? bodies.find((candidate) => candidate.id === body.parentId)
           : undefined;
@@ -257,6 +293,29 @@ export class SolarSystemRenderer {
     this.updateDeclutterVisibility();
     this.renderer.render(this.scene, this.camera);
     this.updateLabels();
+  }
+
+  getStats(): RendererStats {
+    let visibleObjectCount = 0;
+    if (this.barycenterMesh.visible) visibleObjectCount += 1;
+    for (const view of this.bodyViews.values()) {
+      if (view.mesh.visible) visibleObjectCount += 1;
+      if (view.trail.visible) visibleObjectCount += 1;
+      if (view.orbit.visible) visibleObjectCount += 1;
+    }
+    for (const view of this.orbitalViews.values()) {
+      if (view.mesh.visible) visibleObjectCount += 1;
+      if (view.orbit.visible) visibleObjectCount += 1;
+      if (view.tail?.visible) visibleObjectCount += 1;
+    }
+    for (const view of this.beltViews.values()) {
+      if (view.points.visible) visibleObjectCount += 1;
+    }
+    return {
+      bodyViewCount: this.bodyViews.size,
+      orbitalViewCount: this.orbitalViews.size,
+      visibleObjectCount,
+    };
   }
 
   getViewSnapshot(): RendererViewSnapshot {
@@ -408,6 +467,21 @@ export class SolarSystemRenderer {
     this.labelsContainer.style.display = visible ? "block" : "none";
   }
 
+  setBarycenterVisible(visible: boolean): void {
+    this.barycenterVisible = visible;
+    this.barycenterMesh.visible = visible;
+    if (!visible) this.barycenterLabel.style.display = "none";
+  }
+
+  updateBarycenter(positionM: { readonly x: number; readonly y: number; readonly z: number }): void {
+    const scenePosition = calculateBarycenterScenePosition({
+      barycenterM: positionM,
+      frameOriginM: this.viewFrameOriginM,
+      distanceScale: this.distanceScale,
+    });
+    this.barycenterMesh.position.set(scenePosition.x, scenePosition.y, scenePosition.z);
+  }
+
   setDistanceScale(scaleFactor: number): void {
     this.distanceScale = { scaleFactor };
     this.clearTrails();
@@ -534,28 +608,36 @@ export class SolarSystemRenderer {
 
   private createBodyViews(bodies: readonly Readonly<MutableBodyState>[]): void {
     for (const body of bodies) {
-      const visibleRadius = calculatePhysicalMarkerRadius(body.category, body.radiusM);
-      const mesh = this.createDisc(body.id, visibleRadius, body.visual.color);
-      mesh.userData.category = body.category;
-      mesh.userData.parentId = body.parentId;
-      if (body.id === "sun") this.addSunGlow(mesh, body.visual.emissive ?? body.visual.color);
-      if (body.id === "saturn") this.addSaturnRing(mesh, visibleRadius);
-      const label = this.createLabel(body.name);
-      const trail = this.createLine(body.visual.color, body.category === "star" ? 0.08 : 0.28);
-      const orbit = this.createLine(body.visual.color, body.category === "star" ? 0 : 0.18);
-      orbit.visible = body.id !== "sun";
-      this.bodyViews.set(body.id, {
-        mesh,
-        label,
-        trail,
-        orbit,
-        trailPoints: [],
-        baseWorldRadius: visibleRadius,
-        physicalRadiusM: body.radiusM,
-        category: body.category,
-        lastTrailSampleSeconds: Number.NEGATIVE_INFINITY,
-      });
+      this.createBodyView(body);
     }
+  }
+
+  private createBodyView(body: Readonly<MutableBodyState>): void {
+    const visibleRadius = calculatePhysicalMarkerRadius(body.category, body.radiusM);
+    const mesh =
+      body.category === "spacecraft"
+        ? this.createRocketMarker(body.id, visibleRadius, body.visual.color)
+        : this.createDisc(body.id, visibleRadius, body.visual.color);
+    mesh.userData.category = body.category;
+    mesh.userData.parentId = body.parentId;
+    if (body.id === "saturn") this.addSaturnRing(mesh, visibleRadius);
+    const label = this.createLabel(body.name);
+    const trailOpacity = body.category === "star" ? 0.08 : body.category === "spacecraft" ? 0.55 : 0.28;
+    const orbitOpacity = body.category === "star" ? 0 : body.category === "spacecraft" ? 0.35 : 0.18;
+    const trail = this.createLine(body.visual.color, trailOpacity);
+    const orbit = this.createLine(body.visual.color, orbitOpacity);
+    orbit.visible = body.id !== "sun";
+    this.bodyViews.set(body.id, {
+      mesh,
+      label,
+      trail,
+      orbit,
+      trailPoints: [],
+      baseWorldRadius: visibleRadius,
+      physicalRadiusM: body.radiusM,
+      category: body.category,
+      lastTrailSampleSeconds: Number.NEGATIVE_INFINITY,
+    });
   }
 
   private createOrbitalViews(bodies: readonly HierarchicalOrbitalBody[]): void {
@@ -631,7 +713,7 @@ export class SolarSystemRenderer {
       if (body.id === "sun") continue;
       const view = this.bodyViews.get(body.id);
       if (!view) continue;
-      if (body.category === "moon") {
+      if (this.usesLocalParentDisplay(body)) {
         const parent = body.parentId
           ? bodies.find((candidate) => candidate.id === body.parentId)
           : undefined;
@@ -723,12 +805,38 @@ export class SolarSystemRenderer {
     body: Readonly<MutableBodyState>,
     bodies: readonly Readonly<MutableBodyState>[],
   ): THREE.Vector3 {
-    if (body.category !== "moon" || !body.parentId) return this.toScenePosition(body.positionM);
+    if (!this.usesLocalParentDisplay(body) || !body.parentId) return this.toScenePosition(body.positionM);
     const parent = bodies.find((candidate) => candidate.id === body.parentId);
     if (!parent) return this.toScenePosition(body.positionM);
     return this.toScenePosition(parent.positionM).add(
       this.toLocalSceneOffset(subtract(body.positionM, parent.positionM)),
     );
+  }
+
+  private updateSpacecraftOrientation(
+    body: Readonly<MutableBodyState>,
+    bodies: readonly Readonly<MutableBodyState>[],
+    mesh: THREE.Mesh,
+  ): void {
+    if (body.category !== "spacecraft") return;
+    const parent = body.parentId
+      ? bodies.find((candidate) => candidate.id === body.parentId)
+      : undefined;
+    const relativeVelocity = parent
+      ? subtract(body.velocityMps, parent.velocityMps)
+      : body.velocityMps;
+    const velocityLengthSquared =
+      relativeVelocity.x ** 2 + relativeVelocity.y ** 2 + relativeVelocity.z ** 2;
+    const heading =
+      velocityLengthSquared > 0 && Number.isFinite(velocityLengthSquared)
+        ? relativeVelocity
+        : parent
+          ? subtract(body.positionM, parent.positionM)
+          : undefined;
+    if (!heading) return;
+    const planarLengthSquared = heading.x ** 2 + heading.y ** 2;
+    if (!(planarLengthSquared > 0) || !Number.isFinite(planarLengthSquared)) return;
+    mesh.rotation.z = Math.atan2(heading.y, heading.x);
   }
 
   private toLocalSceneOffset(positionM: {
@@ -741,6 +849,10 @@ export class SolarSystemRenderer {
       (positionM.y / ASTRONOMICAL_UNIT_M) * LOCAL_ORBIT_DISPLAY_SCALE,
       (positionM.z / ASTRONOMICAL_UNIT_M) * LOCAL_ORBIT_DISPLAY_SCALE,
     );
+  }
+
+  private usesLocalParentDisplay(body: Readonly<MutableBodyState>): boolean {
+    return body.category === "moon" || (body.category === "spacecraft" && !!body.parentId);
   }
 
   private updateMoonVisibility(): void {
@@ -1031,6 +1143,65 @@ export class SolarSystemRenderer {
     return mesh;
   }
 
+  private createRocketMarker(id: string, radius: number, color: number): THREE.Mesh {
+    const bodyShape = new THREE.Shape();
+    bodyShape.moveTo(radius * 1.15, 0);
+    bodyShape.lineTo(radius * 0.42, radius * 0.42);
+    bodyShape.lineTo(radius * -0.58, radius * 0.32);
+    bodyShape.lineTo(radius * -0.92, radius * 0.64);
+    bodyShape.lineTo(radius * -0.78, radius * 0.16);
+    bodyShape.lineTo(radius * -1.12, 0);
+    bodyShape.lineTo(radius * -0.78, radius * -0.16);
+    bodyShape.lineTo(radius * -0.92, radius * -0.64);
+    bodyShape.lineTo(radius * -0.58, radius * -0.32);
+    bodyShape.lineTo(radius * 0.42, radius * -0.42);
+    bodyShape.closePath();
+
+    const mesh = new THREE.Mesh(
+      new THREE.ShapeGeometry(bodyShape),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+      }),
+    );
+    const window = new THREE.Mesh(
+      new THREE.CircleGeometry(radius * 0.16, 16),
+      new THREE.MeshBasicMaterial({
+        color: 0xf0f7ff,
+        transparent: true,
+        opacity: 0.95,
+        side: THREE.DoubleSide,
+      }),
+    );
+    window.position.set(radius * 0.36, 0, 0.001);
+    const flameShape = new THREE.Shape();
+    flameShape.moveTo(radius * -1.08, radius * 0.16);
+    flameShape.lineTo(radius * -1.55, 0);
+    flameShape.lineTo(radius * -1.08, radius * -0.16);
+    flameShape.closePath();
+    const flame = new THREE.Mesh(
+      new THREE.ShapeGeometry(flameShape),
+      new THREE.MeshBasicMaterial({
+        color: 0xffb36b,
+        transparent: true,
+        opacity: 0.78,
+        side: THREE.DoubleSide,
+      }),
+    );
+    mesh.add(window, flame);
+    mesh.userData.bodyId = id;
+    mesh.userData.baseVisible = true;
+    mesh.userData.hiddenByDeclutter = false;
+    mesh.userData.labelHiddenByDeclutter = false;
+    mesh.renderOrder = 4;
+    window.renderOrder = 4;
+    flame.renderOrder = 3;
+    this.scene.add(mesh);
+    return mesh;
+  }
+
   private createLabel(text: string): HTMLDivElement {
     const label = document.createElement("div");
     label.className = "body-label";
@@ -1049,13 +1220,35 @@ export class SolarSystemRenderer {
     return line;
   }
 
-  private addSunGlow(mesh: THREE.Mesh, color: number): void {
-    const glow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.42, 40),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.13 }),
+  private createBarycenterMesh(): THREE.Mesh {
+    const mesh = new THREE.Mesh(
+      new THREE.RingGeometry(0.055, 0.095, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xf0f5ff,
+        transparent: true,
+        opacity: 0.78,
+        side: THREE.DoubleSide,
+      }),
     );
-    glow.renderOrder = 0;
-    mesh.add(glow);
+    mesh.userData.renderRadiusPx = 5;
+    mesh.renderOrder = 5;
+    mesh.visible = false;
+    this.scene.add(mesh);
+    return mesh;
+  }
+
+  private disposeObject(object: THREE.Object3D): void {
+    object.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+        child.geometry.dispose();
+        const material = child.material;
+        if (Array.isArray(material)) {
+          for (const entry of material) entry.dispose();
+        } else {
+          material.dispose();
+        }
+      }
+    });
   }
 
   private addSaturnRing(mesh: THREE.Mesh, radius: number): void {
@@ -1168,8 +1361,13 @@ export class SolarSystemRenderer {
     const entries = [
       ...[...this.bodyViews.values()].map((view) => ({ mesh: view.mesh, label: view.label })),
       ...[...this.orbitalViews.values()].map((view) => ({ mesh: view.mesh, label: view.label })),
+      { mesh: this.barycenterMesh, label: this.barycenterLabel },
     ];
     for (const view of entries) {
+      if (view.mesh === this.barycenterMesh && !this.barycenterVisible) {
+        view.label.style.display = "none";
+        continue;
+      }
       if (!view.mesh.visible || view.mesh.userData.labelHiddenByDeclutter === true) {
         view.label.style.display = "none";
         continue;

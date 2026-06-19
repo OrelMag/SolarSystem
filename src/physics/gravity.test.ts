@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CelestialBody } from "../domain/types";
 import { vector } from "../domain/vector";
+import {
+  createMinimumDistanceCollisionPolicy,
+  SimulationCollisionError,
+} from "./collisionPolicy";
 import { GRAVITATIONAL_CONSTANT } from "./constants";
 import { calculateAccelerations } from "./gravity";
 
@@ -40,7 +44,10 @@ describe("calculateAccelerations", () => {
 
   it("rejects overlapping bodies", () => {
     expect(() =>
-      calculateAccelerations([body("a", 1, 0), body("b", 1, 0)], 0.1),
-    ).toThrow(/too close/);
+      calculateAccelerations(
+        [body("a", 1, 0), body("b", 1, 0)],
+        createMinimumDistanceCollisionPolicy(0.1),
+      ),
+    ).toThrow(SimulationCollisionError);
   });
 });

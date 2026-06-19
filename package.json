@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:all": "npm run typecheck && npm test && npm run build && npm run test:e2e",
     "test:watch": "vitest",
+    "build:launcher": "powershell -ExecutionPolicy Bypass -File tools/build-launcher.ps1",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
@@ -15,6 +18,7 @@
     "three": "^0.184.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@types/three": "^0.184.1",
     "typescript": "^5.9.3",
     "vite": "^8.0.16",

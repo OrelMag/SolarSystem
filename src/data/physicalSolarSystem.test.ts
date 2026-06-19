@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { magnitude, subtract } from "../domain/vector";
+import { createMinimumDistanceCollisionPolicy } from "../physics/collisionPolicy";
 import { calculateConservedQuantities, relativeDrift } from "../physics/diagnostics";
 import { NBodySimulation } from "../physics/simulation";
 import { createPhysicalSolarSystem } from "./physicalSolarSystem";
@@ -41,7 +42,7 @@ describe("createPhysicalSolarSystem", () => {
   it("keeps close moon systems finite with the moon-capable timestep", () => {
     const simulation = new NBodySimulation(createPhysicalSolarSystem(), {
       fixedTimestepSeconds: 300,
-      minimumDistanceM: 1_000,
+      collisionPolicy: createMinimumDistanceCollisionPolicy(1_000),
     });
     const initial = calculateConservedQuantities(simulation.bodies);
     simulation.step(2_880);
@@ -70,7 +71,7 @@ describe("createPhysicalSolarSystem", () => {
   it("resets the physical moon state exactly", () => {
     const simulation = new NBodySimulation(createPhysicalSolarSystem(), {
       fixedTimestepSeconds: 300,
-      minimumDistanceM: 1_000,
+      collisionPolicy: createMinimumDistanceCollisionPolicy(1_000),
     });
     const initial = simulation.snapshot;
     simulation.step(20);

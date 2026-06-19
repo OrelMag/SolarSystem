@@ -96,6 +96,24 @@ describe("marker sizing", () => {
     ).toBe(9);
   });
 
+  it("sizes spacecraft as a readable mission marker", () => {
+    expect(calculatePhysicalMarkerRadius("spacecraft", 10)).toBe(0.11);
+    expect(
+      calculateMarkerSizing({
+        mode: "readable",
+        category: "spacecraft",
+        physicalRadiusM: 10,
+        baseWorldRadius: 0.11,
+        selected: false,
+        cameraZoom: 1,
+        viewportHeightPx: 1_000,
+        cameraWorldHeight: 110,
+        manualScaleEnabled: false,
+        manualScale: undefined,
+      }).pixelRadius,
+    ).toBe(9);
+  });
+
   it("caps manual overrides for compact primary dots", () => {
     expect(
       calculateMarkerSizing({

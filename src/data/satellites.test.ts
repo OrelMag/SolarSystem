@@ -8,6 +8,7 @@ import {
 } from "../physics/hierarchicalOrbits";
 import { J2000_JULIAN_DAY } from "../physics/orbitalMechanics";
 import { add, magnitude, subtract } from "../domain/vector";
+import { createMinimumDistanceCollisionPolicy } from "../physics/collisionPolicy";
 import { NBodySimulation } from "../physics/simulation";
 
 describe("planetary neighborhoods", () => {
@@ -60,11 +61,11 @@ describe("planetary neighborhoods", () => {
     const bodies = createSolarSystem();
     const baseline = new NBodySimulation(bodies, {
       fixedTimestepSeconds: 10_800,
-      minimumDistanceM: 1_000,
+      collisionPolicy: createMinimumDistanceCollisionPolicy(1_000),
     });
     const comparison = new NBodySimulation(bodies, {
       fixedTimestepSeconds: 10_800,
-      minimumDistanceM: 1_000,
+      collisionPolicy: createMinimumDistanceCollisionPolicy(1_000),
     });
     baseline.step(100);
     propagateHierarchicalBodies(

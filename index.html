@@ -60,6 +60,25 @@
           </div>
         </section>
 
+        <section class="control-section launch-section">
+          <div class="section-heading">
+            <span>Launch</span>
+            <span id="launch-status" class="status">READY</span>
+          </div>
+          <label for="launch-target">Target</label>
+          <select id="launch-target"></select>
+          <div class="button-row">
+            <button id="launch-spacecraft" class="primary" type="button">Launch</button>
+            <button id="clear-spacecraft" type="button">Clear Craft</button>
+          </div>
+          <dl>
+            <div><dt>Distance</dt><dd id="launch-distance">-</dd></div>
+            <div><dt>Closest</dt><dd id="launch-closest">-</dd></div>
+            <div><dt>Estimate</dt><dd id="launch-estimate">-</dd></div>
+            <div><dt>Injection</dt><dd id="launch-injection">-</dd></div>
+          </dl>
+        </section>
+
         <section class="control-section navigator-section">
           <div class="section-heading"><span>Body Navigator</span></div>
           <label class="sr-only" for="body-search">Search bodies</label>
@@ -133,6 +152,7 @@
           <label class="check-row"><input id="comet-paths" type="checkbox" checked /><span>Comet paths</span></label>
           <label class="check-row"><input id="comet-tails" type="checkbox" checked /><span>Comet tails</span></label>
           <label class="check-row"><input id="moons-toggle" type="checkbox" checked /><span>Major moons</span></label>
+          <label class="check-row"><input id="barycenter-toggle" type="checkbox" /><span>Center of mass marker</span></label>
           <label class="check-row"><input id="labels-toggle" type="checkbox" checked /><span>Body labels</span></label>
           <label for="distance-scale">
             Distance scale
@@ -151,6 +171,11 @@
             <div><dt>Time scale</dt><dd id="time-scale">7 days/s</dd></div>
             <div><dt>Max steps</dt><dd id="max-steps">80</dd></div>
             <div><dt>Catch-up clamp</dt><dd id="catchup">Idle</dd></div>
+            <div><dt>Physics time</dt><dd id="physics-time">0.00 ms</dd></div>
+            <div><dt>Render time</dt><dd id="render-time">0.00 ms</dd></div>
+            <div><dt>Diagnostics time</dt><dd id="diagnostics-time">0.00 ms</dd></div>
+            <div><dt>Bodies</dt><dd id="body-count">0</dd></div>
+            <div><dt>Visible objects</dt><dd id="visible-objects">0</dd></div>
             <div><dt>Energy drift</dt><dd id="energy-drift">0.00 ppm</dd></div>
             <div><dt>Energy trend</dt><dd id="energy-spark"></dd></div>
             <div><dt>Angular drift</dt><dd id="momentum-drift">0.00 ppm</dd></div>

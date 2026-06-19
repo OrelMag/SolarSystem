@@ -1,41 +1,58 @@
 import type { CelestialBody, MutableBodyState, SimulationSnapshot } from "../domain/types";
-import { add, isFiniteVector, scale } from "../domain/vector";
+import { add, isFiniteVector, scale, type Vector3 } from "../domain/vector";
+import {
+  DEFAULT_COLLISION_POLICY,
+  validateCollisionPolicy,
+  type CollisionPolicy,
+} from "./collisionPolicy";
 import { calculateAccelerations } from "./gravity";
 
 export interface SimulationConfig {
   readonly fixedTimestepSeconds: number;
-  readonly minimumDistanceM: number;
+  readonly collisionPolicy?: CollisionPolicy;
 }
 
 function validateBodies(bodies: readonly CelestialBody[]): void {
   const identifiers = new Set<string>();
   for (const body of bodies) {
-    if (!body.id || identifiers.has(body.id)) {
+    validateBody(body);
+    if (identifiers.has(body.id)) {
       throw new Error(`Body identifiers must be unique and non-empty: "${body.id}".`);
-    }
-    if (!(body.massKg > 0) || !(body.radiusM > 0)) {
-      throw new Error(`Body "${body.id}" must have positive mass and radius.`);
-    }
-    if (!isFiniteVector(body.positionM) || !isFiniteVector(body.velocityMps)) {
-      throw new Error(`Body "${body.id}" has a non-finite state vector.`);
     }
     identifiers.add(body.id);
   }
 }
 
-function cloneBodies(bodies: readonly CelestialBody[]): MutableBodyState[] {
-  return bodies.map((body) => ({
+function validateBody(body: CelestialBody): void {
+  if (!body.id) {
+    throw new Error(`Body identifiers must be unique and non-empty: "${body.id}".`);
+  }
+  if (!(body.massKg > 0) || !(body.radiusM > 0)) {
+    throw new Error(`Body "${body.id}" must have positive mass and radius.`);
+  }
+  if (!isFiniteVector(body.positionM) || !isFiniteVector(body.velocityMps)) {
+    throw new Error(`Body "${body.id}" has a non-finite state vector.`);
+  }
+}
+
+function cloneBody(body: CelestialBody): MutableBodyState {
+  return {
     ...body,
     positionM: { ...body.positionM },
     velocityMps: { ...body.velocityMps },
     visual: { ...body.visual },
-  }));
+  };
+}
+
+function cloneBodies(bodies: readonly CelestialBody[]): MutableBodyState[] {
+  return bodies.map(cloneBody);
 }
 
 export class NBodySimulation {
   readonly fixedTimestepSeconds: number;
-  private readonly minimumDistanceM: number;
+  private readonly collisionPolicy: CollisionPolicy;
   private readonly initialBodies: readonly CelestialBody[];
+  private readonly runtimeBodyIds = new Set<string>();
   private state: MutableBodyState[];
   private elapsed = 0;
 
@@ -44,6 +61,8 @@ export class NBodySimulation {
     if (!(config.fixedTimestepSeconds > 0) || !Number.isFinite(config.fixedTimestepSeconds)) {
       throw new Error("Fixed timestep must be finite and greater than zero.");
     }
+    this.collisionPolicy = config.collisionPolicy ?? DEFAULT_COLLISION_POLICY;
+    validateCollisionPolicy(this.collisionPolicy);
     this.initialBodies = bodies.map((body) => ({
       ...body,
       positionM: { ...body.positionM },
@@ -52,7 +71,6 @@ export class NBodySimulation {
     }));
     this.state = cloneBodies(this.initialBodies);
     this.fixedTimestepSeconds = config.fixedTimestepSeconds;
-    this.minimumDistanceM = config.minimumDistanceM;
   }
 
   static fromSnapshot(snapshot: SimulationSnapshot, config: SimulationConfig): NBodySimulation {
@@ -90,14 +108,45 @@ export class NBodySimulation {
     }
   }
 
+  addRuntimeBody(body: CelestialBody): void {
+    validateBody(body);
+    if (this.state.some((candidate) => candidate.id === body.id)) {
+      throw new Error(`Body identifiers must be unique and non-empty: "${body.id}".`);
+    }
+    this.state.push(cloneBody(body));
+    this.runtimeBodyIds.add(body.id);
+  }
+
+  removeRuntimeBody(id: string): boolean {
+    if (!this.runtimeBodyIds.has(id)) return false;
+    const nextState = this.state.filter((body) => body.id !== id);
+    const removed = nextState.length !== this.state.length;
+    this.state = nextState;
+    this.runtimeBodyIds.delete(id);
+    return removed;
+  }
+
+  applyRuntimeBodyVelocityDelta(id: string, deltaVelocityMps: Vector3): void {
+    if (!this.runtimeBodyIds.has(id)) {
+      throw new Error(`Body "${id}" is not a runtime body.`);
+    }
+    if (!isFiniteVector(deltaVelocityMps)) {
+      throw new Error(`Velocity delta for body "${id}" must be finite.`);
+    }
+    const body = this.state.find((candidate) => candidate.id === id);
+    if (!body) throw new Error(`Runtime body "${id}" is missing from simulation state.`);
+    body.velocityMps = add(body.velocityMps, deltaVelocityMps);
+  }
+
   reset(): void {
     this.state = cloneBodies(this.initialBodies);
+    this.runtimeBodyIds.clear();
     this.elapsed = 0;
   }
 
   private integrateOneStep(): void {
     const dt = this.fixedTimestepSeconds;
-    const initialAcceleration = calculateAccelerations(this.state, this.minimumDistanceM);
+    const initialAcceleration = calculateAccelerations(this.state, this.collisionPolicy);
 
     for (let index = 0; index < this.state.length; index += 1) {
       const body = this.state[index];
@@ -109,7 +158,7 @@ export class NBodySimulation {
       );
     }
 
-    const finalAcceleration = calculateAccelerations(this.state, this.minimumDistanceM);
+    const finalAcceleration = calculateAccelerations(this.state, this.collisionPolicy);
     for (let index = 0; index < this.state.length; index += 1) {
       const body = this.state[index];
       const before = initialAcceleration[index];

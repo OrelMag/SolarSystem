@@ -3,10 +3,13 @@ import { add, scale, vector } from "../domain/vector";
 import { orbitalElementsToState, type OrbitalElements } from "./orbitalElements";
 
 export const SOLAR_DATASET_METADATA = {
+  datasetId: "jpl-approximate-j2000",
   epoch: "J2000.0 (2000-01-01T12:00:00Z)",
   referenceFrame: "Mean ecliptic and equinox of J2000.0",
   source: "NASA/JPL Solar System Dynamics, approximate positions of the planets",
   sourceUrl: "https://ssd.jpl.nasa.gov/planets/approx_pos.html",
+  originalUnits: "Astronomical units and degrees",
+  conversionApplied: "Orbital elements converted from AU/degrees to SI Cartesian state vectors.",
   notes: "J2000 base elements converted from AU/degrees to SI Cartesian state.",
 } as const;
 

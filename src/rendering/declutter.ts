@@ -140,12 +140,18 @@ function categoryPriority(item: DeclutterItem): number {
   if (item.selected) return 0;
   if (item.category === "star") return 1;
   if (item.category === "planet") return 2;
-  if (item.category === "dwarf-planet") return 3;
-  return 4;
+  if (item.category === "spacecraft") return 3;
+  if (item.category === "dwarf-planet") return 4;
+  return 5;
 }
 
 function isAlwaysVisible(item: DeclutterItem): boolean {
-  return item.selected || item.category === "star" || item.category === "planet";
+  return (
+    item.selected ||
+    item.category === "star" ||
+    item.category === "planet" ||
+    item.category === "spacecraft"
+  );
 }
 
 function itemMarkerBounds(item: DeclutterItem, paddingPx: number): Bounds {

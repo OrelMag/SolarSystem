@@ -1,6 +1,11 @@
 import "./style.css";
 import { GIFEncoder, applyPalette, quantize } from "gifenc";
+import { formatDatasetNotes } from "./app/datasetPanel";
+import { setupCollapsibleSections } from "./app/collapsibleSections";
+import { formatDriftPartsPerMillion } from "./app/diagnosticsPanel";
+import { requireElement } from "./app/dom";
 import {
+  calculateCenterOfMass,
   DiagnosticsHistory,
   sparkline,
 } from "./app/diagnosticsHistory";
@@ -11,8 +16,29 @@ import {
   type GifExportEstimate,
 } from "./app/gifExport";
 import {
+  createDockedSpacecraftBody,
+  createLaunchMissionState,
+  createLaunchTargetOptions,
+  findLaunchTargetState,
+  updateLaunchMissionState,
+  updateLaunchMissionGuidanceMode,
+  type LaunchMissionState,
+} from "./app/launchMission";
+import { launchStatusLabel } from "./app/launchPanel";
+import {
+  formatGifExportProgress,
+  yieldToBrowser,
+} from "./app/gifExportController";
+import {
+  formatMilliseconds,
+  type PerformanceTelemetry,
+} from "./app/performanceTelemetry";
+import { calculatePhysicsStepBudget } from "./app/simulationClock";
+import {
   formatDuration,
+  formatDistanceM,
   formatElapsed,
+  formatSpeedMps,
   formatVector,
 } from "./app/format";
 import {
@@ -21,9 +47,12 @@ import {
   DEFAULT_TIME_SCALE_SECONDS,
   findScenario,
   SCENARIOS,
-  type ScenarioDefinition,
 } from "./app/scenarios";
 import { buildSelectedBodyDetail } from "./app/selectedBody";
+import {
+  shouldRefreshSelectedBodyDetail,
+  type SelectedBodyRefreshSnapshot,
+} from "./app/selectedBodyRefresh";
 import {
   loadVisualSettings,
   resetAllBodyScaleOverrides,
@@ -33,19 +62,26 @@ import {
   visualSettingsToScaleMap,
   type VisualBodyScaleSettings,
 } from "./app/visualSettings";
-import type { HierarchicalBodyState, HierarchicalOrbitalBody } from "./domain/orbits";
-import { magnitude } from "./domain/vector";
+import {
+  calculateScenarioOrbitalStates,
+  createScenarioSimulation,
+} from "./app/simulationSession";
+import type { HierarchicalOrbitalBody } from "./domain/orbits";
+import type { MutableBodyState } from "./domain/types";
+import { magnitude, subtract, type Vector3 } from "./domain/vector";
 import {
   calculateConservedQuantities,
   relativeDrift,
   type ConservedQuantities,
 } from "./physics/diagnostics";
+import { createMinimumDistanceCollisionPolicy } from "./physics/collisionPolicy";
 import { DAY_SECONDS, J2000_ISO } from "./physics/constants";
-import {
-  propagateHierarchicalBodies,
-  validateOrbitalHierarchy,
-} from "./physics/hierarchicalOrbits";
 import { calculateAccelerations } from "./physics/gravity";
+import {
+  calculateSpacecraftGuidance,
+  DEFAULT_SPACECRAFT_GUIDANCE,
+} from "./physics/guidance";
+import { ACTIVE_SPACECRAFT_ID, createEarthLaunch } from "./physics/launch";
 import { NBodySimulation } from "./physics/simulation";
 import {
   SolarSystemRenderer,
@@ -62,7 +98,9 @@ import {
 } from "./ui/navigator";
 
 const MINIMUM_DISTANCE_M = 1_000;
+const COLLISION_POLICY = createMinimumDistanceCollisionPolicy(MINIMUM_DISTANCE_M);
 const DIAGNOSTIC_INTERVAL_SECONDS = 30 * DAY_SECONDS;
+const SELECTED_BODY_REFRESH_INTERVAL_MS = 1_000;
 const ENERGY_WARNING_DRIFT = 5e-5;
 const ANGULAR_WARNING_DRIFT = 5e-5;
 
@@ -71,6 +109,7 @@ const GROUP_LABELS: Readonly<Partial<Record<NavigatorCategory, string>>> = {
   planet: "Planets",
   "dwarf-planet": "Dwarf Planets",
   moon: "Moons",
+  spacecraft: "Spacecraft",
   comet: "Comets",
 };
 
@@ -84,40 +123,19 @@ const TIME_SCALE_LABELS = new Map<string, string>([
   ["31557600", "1 year/s"],
 ]);
 
-function requireElement<T extends HTMLElement>(id: string): T {
-  const element = document.getElementById(id);
-  if (!(element instanceof HTMLElement)) throw new Error(`Missing element "#${id}".`);
-  return element as T;
-}
-
-function createSimulation(scenario: ScenarioDefinition): NBodySimulation {
-  const bodies = scenario.createBodies();
-  validateOrbitalHierarchy(
-    scenario.displayOnlyOrbitalBodies,
-    bodies.map((body) => body.id),
-  );
-  return new NBodySimulation(bodies, {
-    fixedTimestepSeconds: DEFAULT_FIXED_TIMESTEP_SECONDS,
-    minimumDistanceM: MINIMUM_DISTANCE_M,
-  });
-}
-
-function calculateOrbitalStates(
-  orbitalDefinitions: readonly HierarchicalOrbitalBody[],
-  simulation: NBodySimulation,
-): HierarchicalBodyState[] {
-  return propagateHierarchicalBodies(
-    orbitalDefinitions,
-    simulation.bodies,
-    2_451_545 + simulation.elapsedSeconds / DAY_SECONDS,
-  );
-}
-
 function formatTimeScale(seconds: number): string {
   if (seconds === 1) return "Real time";
   if (seconds < DAY_SECONDS) return `${(seconds / 3_600).toLocaleString()} hours/s`;
   if (seconds < 365 * DAY_SECONDS) return `${(seconds / DAY_SECONDS).toLocaleString()} days/s`;
   return `${(seconds / (365.25 * DAY_SECONDS)).toFixed(2)} years/s`;
+}
+
+function calculateActiveStepBudget(): number {
+  return calculatePhysicsStepBudget({
+    timeScaleSeconds,
+    fixedTimestepSeconds: DEFAULT_FIXED_TIMESTEP_SECONDS,
+    baseMaxStepsPerFrame: DEFAULT_MAX_STEPS_PER_FRAME,
+  });
 }
 
 function createNavigatorEntries(
@@ -161,6 +179,14 @@ const gifExportProgress = requireElement<HTMLProgressElement>("gif-export-progre
 const gifExportStatus = requireElement<HTMLOutputElement>("gif-export-status");
 const gifOutputWidthInput = requireElement<HTMLInputElement>("gif-output-width");
 const gifOutputHeightInput = requireElement<HTMLInputElement>("gif-output-height");
+const launchTargetSelect = requireElement<HTMLSelectElement>("launch-target");
+const launchSpacecraftButton = requireElement<HTMLButtonElement>("launch-spacecraft");
+const clearSpacecraftButton = requireElement<HTMLButtonElement>("clear-spacecraft");
+const launchStatusElement = requireElement("launch-status");
+const launchDistanceElement = requireElement("launch-distance");
+const launchClosestElement = requireElement("launch-closest");
+const launchEstimateElement = requireElement("launch-estimate");
+const launchInjectionElement = requireElement("launch-injection");
 const fitButton = requireElement<HTMLButtonElement>("fit");
 const fitInnerButton = requireElement<HTMLButtonElement>("fit-inner");
 const focusSunButton = requireElement<HTMLButtonElement>("focus-sun");
@@ -187,6 +213,7 @@ const cometsInput = requireElement<HTMLInputElement>("comets-toggle");
 const cometPathsInput = requireElement<HTMLInputElement>("comet-paths");
 const cometTailsInput = requireElement<HTMLInputElement>("comet-tails");
 const moonsInput = requireElement<HTMLInputElement>("moons-toggle");
+const barycenterInput = requireElement<HTMLInputElement>("barycenter-toggle");
 const labelsInput = requireElement<HTMLInputElement>("labels-toggle");
 const distanceScaleInput = requireElement<HTMLInputElement>("distance-scale");
 const distanceScaleValue = requireElement<HTMLOutputElement>("distance-scale-value");
@@ -199,6 +226,11 @@ const stepElement = requireElement("step");
 const timeScaleElement = requireElement("time-scale");
 const maxStepsElement = requireElement("max-steps");
 const catchupElement = requireElement("catchup");
+const physicsTimeElement = requireElement("physics-time");
+const renderTimeElement = requireElement("render-time");
+const diagnosticsTimeElement = requireElement("diagnostics-time");
+const bodyCountElement = requireElement("body-count");
+const visibleObjectsElement = requireElement("visible-objects");
 const energyDriftElement = requireElement("energy-drift");
 const energySparkElement = requireElement("energy-spark");
 const momentumDriftElement = requireElement("momentum-drift");
@@ -214,6 +246,8 @@ const datasetSourceElement = requireElement("dataset-source");
 const datasetEpochElement = requireElement("dataset-epoch");
 const datasetFrameElement = requireElement("dataset-frame");
 const datasetNotesElement = requireElement("dataset-notes");
+const panelElement = document.querySelector<HTMLElement>(".panel");
+if (!panelElement) throw new Error("Missing controls panel.");
 
 for (const scenario of SCENARIOS) {
   const option = document.createElement("option");
@@ -223,22 +257,32 @@ for (const scenario of SCENARIOS) {
 }
 
 let currentScenario = findScenario(scenarioSelect.value || "full-solar-system");
-let simulation = createSimulation(currentScenario);
+let simulation = createScenarioSimulation(
+  currentScenario,
+  COLLISION_POLICY,
+  DEFAULT_FIXED_TIMESTEP_SECONDS,
+);
 let orbitalDefinitions = currentScenario.displayOnlyOrbitalBodies;
-let orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+let orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
 let visualSettings: VisualBodyScaleSettings = loadVisualSettings(window.localStorage);
+let dockedSpacecraft: MutableBodyState | undefined;
+let dockedSpacecraftDirectionM: Vector3 | undefined;
 let renderer = createRenderer();
 let running = true;
 let accumulatorSeconds = 0;
 let lastFrameTime = performance.now();
 let timeScaleSeconds = DEFAULT_TIME_SCALE_SECONDS;
+let maxStepsPerFrame = calculateActiveStepBudget();
 let initialConserved = calculateConservedQuantities(simulation.bodies);
 let latestConserved: ConservedQuantities = initialConserved;
 let lastDiagnosticsElapsed = Number.NEGATIVE_INFINITY;
 let diagnosticsHistory = new DiagnosticsHistory();
 let namesById = buildNamesById();
-let navigatorEntries = createNavigatorEntries(simulation.bodies, orbitalDefinitions, namesById);
+let navigatorEntries = createNavigatorEntries(getDisplayBodies(), orbitalDefinitions, namesById);
 let selectedBodyId = currentScenario.defaultTargetId;
+let selectedBodyRefreshSnapshot: SelectedBodyRefreshSnapshot | undefined;
+let launchMission: LaunchMissionState | undefined;
+let launchInjectionSpeedMps: number | undefined;
 let filteredNavigatorEntries: NavigatorEntry[] = [];
 let activeNavigatorIndex = 0;
 let activeGifExport:
@@ -254,7 +298,7 @@ function createRenderer(): SolarSystemRenderer {
   const instance = new SolarSystemRenderer(
     sceneElement,
     labelsElement,
-    simulation.bodies,
+    getDisplayBodies(),
     orbitalDefinitions,
     currentScenario.belts,
     sun.massKg,
@@ -267,12 +311,119 @@ function createRenderer(): SolarSystemRenderer {
   return instance;
 }
 
+function getDisplayBodies(): readonly Readonly<MutableBodyState>[] {
+  return dockedSpacecraft ? [...simulation.bodies, dockedSpacecraft] : simulation.bodies;
+}
+
+function getDisplayBodiesFor(
+  bodies: readonly Readonly<MutableBodyState>[],
+  orbitalStatesForBodies: typeof orbitalStates,
+): readonly Readonly<MutableBodyState>[] {
+  const docked = createDockedSpacecraftFor(bodies, orbitalStatesForBodies);
+  return docked ? [...bodies, docked] : bodies;
+}
+
+function createDockedSpacecraftFor(
+  bodies: readonly Readonly<MutableBodyState>[],
+  orbitalStatesForBodies: typeof orbitalStates,
+): MutableBodyState | undefined {
+  if (!dockedSpacecraft || !launchMission) return undefined;
+  const target = findLaunchTargetState({
+    id: launchMission.targetId,
+    bodies,
+    orbitalStates: orbitalStatesForBodies,
+  });
+  if (!target) return undefined;
+  return createDockedSpacecraftBody({
+    target,
+    approachDirectionM: dockedSpacecraftDirectionM,
+  });
+}
+
+function refreshDockedSpacecraftDisplay(): void {
+  const nextDockedSpacecraft = createDockedSpacecraftFor(simulation.bodies, orbitalStates);
+  if (nextDockedSpacecraft) dockedSpacecraft = nextDockedSpacecraft;
+}
+
 function buildNamesById(): Map<string, string> {
   return new Map<string, string>([
-    ...simulation.bodies.map((body) => [body.id, body.name] as const),
+    ...getDisplayBodies().map((body) => [body.id, body.name] as const),
     ...currentScenario.physicalOrbitalBodies.map((body) => [body.id, body.name] as const),
     ...orbitalDefinitions.map((body) => [body.id, body.name] as const),
   ]);
+}
+
+function hasEarth(): boolean {
+  return simulation.bodies.some((body) => body.id === "earth");
+}
+
+function hasActiveSpacecraft(): boolean {
+  return (
+    dockedSpacecraft !== undefined ||
+    simulation.bodies.some((body) => body.id === ACTIVE_SPACECRAFT_ID)
+  );
+}
+
+function refreshCatalog(): void {
+  namesById = buildNamesById();
+  navigatorEntries = createNavigatorEntries(getDisplayBodies(), orbitalDefinitions, namesById);
+  renderLaunchTargets();
+}
+
+function renderLaunchTargets(): void {
+  const previousValue = launchTargetSelect.value;
+  const options = createLaunchTargetOptions({
+    bodies: simulation.bodies,
+    orbitalStates,
+    namesById,
+  });
+  launchTargetSelect.replaceChildren();
+  for (const target of options) {
+    const option = document.createElement("option");
+    option.value = target.id;
+    option.textContent = target.parentName
+      ? `${target.name} (${target.parentName})`
+      : target.name;
+    launchTargetSelect.append(option);
+  }
+  if (options.some((option) => option.id === previousValue)) {
+    launchTargetSelect.value = previousValue;
+  } else if (options[0]) {
+    launchTargetSelect.value = options[0].id;
+  }
+  renderLaunchPanel();
+}
+
+function renderLaunchPanel(): void {
+  const earthAvailable = hasEarth();
+  const spacecraftActive = hasActiveSpacecraft();
+  const targetSelected = launchTargetSelect.value.length > 0;
+  launchSpacecraftButton.disabled = !earthAvailable || !targetSelected;
+  clearSpacecraftButton.disabled = !spacecraftActive;
+  launchTargetSelect.disabled = !earthAvailable;
+  launchStatusElement.classList.remove("en-route", "arrived", "missed", "paused");
+
+  if (!earthAvailable) {
+    launchStatusElement.textContent = "NO EARTH";
+    launchStatusElement.classList.add("paused");
+  } else if (launchMission) {
+    launchStatusElement.textContent = launchStatusLabel(launchMission.status);
+    launchStatusElement.classList.add(launchMission.status);
+  } else {
+    launchStatusElement.textContent = targetSelected ? "READY" : "NO TARGET";
+  }
+
+  launchDistanceElement.textContent = launchMission
+    ? formatDistanceM(launchMission.currentDistanceM)
+    : "-";
+  launchClosestElement.textContent = launchMission
+    ? formatDistanceM(launchMission.closestApproachM)
+    : "-";
+  launchEstimateElement.textContent = launchMission
+    ? formatDuration(launchMission.estimatedTransferSeconds)
+    : "-";
+  launchInjectionElement.textContent =
+    launchInjectionSpeedMps === undefined ? "-" : formatSpeedMps(launchInjectionSpeedMps);
 }
 
 function updateRunningUi(): void {
@@ -313,6 +464,7 @@ function applyLayerSettingsToRenderer(target = renderer): void {
   target.setCometPathsVisible(cometPathsInput.checked);
   target.setCometTailsVisible(cometTailsInput.checked);
   target.setMoonsVisible(moonsInput.checked);
+  target.setBarycenterVisible(barycenterInput.checked);
   target.setLabelsVisible(labelsInput.checked);
 }
 
@@ -331,19 +483,40 @@ function updateManualScaleControls(): void {
   bodyScaleValue.value = `${selectedScale.toFixed(2)}x`;
 }
 
-function renderSelectedBody(): void {
-  const accelerations = calculateAccelerations(simulation.bodies, MINIMUM_DISTANCE_M);
+function renderSelectedBody(force = false): void {
+  const nowMs = performance.now();
+  if (
+    !shouldRefreshSelectedBodyDetail({
+      force,
+      bodyId: selectedBodyId,
+      elapsedSeconds: simulation.elapsedSeconds,
+      nowMs,
+      minimumIntervalMs: SELECTED_BODY_REFRESH_INTERVAL_MS,
+      previous: selectedBodyRefreshSnapshot,
+    })
+  ) {
+    return;
+  }
+
+  const displayBodies = getDisplayBodies();
+  const accelerations = calculateAccelerations(simulation.bodies, COLLISION_POLICY);
   const accelerationsById = new Map(
     simulation.bodies.map((body, index) => [body.id, accelerations[index] ?? { x: 0, y: 0, z: 0 }] as const),
   );
+  if (dockedSpacecraft) accelerationsById.set(ACTIVE_SPACECRAFT_ID, { x: 0, y: 0, z: 0 });
   const detail = buildSelectedBodyDetail({
     id: selectedBodyId,
-    massiveBodies: simulation.bodies,
+    massiveBodies: displayBodies,
     orbitalStates,
     namesById,
     accelerationsById,
   });
   if (!detail) return;
+  selectedBodyRefreshSnapshot = {
+    bodyId: selectedBodyId,
+    elapsedSeconds: simulation.elapsedSeconds,
+    refreshedAtMs: nowMs,
+  };
   selectedBodyElement.replaceChildren();
   const title = document.createElement("strong");
   title.textContent = detail.title;
@@ -370,7 +543,7 @@ function selectAndFollow(id: string): void {
   renderer.focusBody(id, true);
   renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
   renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
-  renderSelectedBody();
+  renderSelectedBody(true);
   updateManualScaleControls();
   renderNavigator();
   updateGifExportHint();
@@ -417,7 +590,7 @@ function updateDatasetPanel(): void {
   datasetSourceElement.textContent = currentScenario.metadata.source;
   datasetEpochElement.textContent = currentScenario.metadata.epoch;
   datasetFrameElement.textContent = currentScenario.metadata.referenceFrame;
-  datasetNotesElement.textContent = `${currentScenario.description} ${currentScenario.metadata.notes}`;
+  datasetNotesElement.textContent = formatDatasetNotes(currentScenario);
 }
 
 function resetDiagnostics(): void {
@@ -427,37 +600,175 @@ function resetDiagnostics(): void {
   diagnosticsHistory.reset();
 }
 
-function resetCurrentScenario(): void {
-  simulation.reset();
-  accumulatorSeconds = 0;
-  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
+function clearActiveSpacecraft(selectFallback: boolean): void {
+  const removedDockedSpacecraft = dockedSpacecraft !== undefined;
+  dockedSpacecraft = undefined;
+  dockedSpacecraftDirectionM = undefined;
+  const removedFromSimulation = simulation.removeRuntimeBody(ACTIVE_SPACECRAFT_ID);
+  const removedFromRenderer = renderer.removeBody(ACTIVE_SPACECRAFT_ID);
+  if (!removedDockedSpacecraft && !removedFromSimulation && !removedFromRenderer && !launchMission) return;
+  launchMission = undefined;
+  launchInjectionSpeedMps = undefined;
+  if (selectedBodyId === ACTIVE_SPACECRAFT_ID && selectFallback) {
+    selectedBodyId = simulation.bodies.some((body) => body.id === "earth")
+      ? "earth"
+      : currentScenario.defaultTargetId;
+    renderer.selectBody(selectedBodyId);
+    renderer.focusBody(selectedBodyId, false);
+  }
   resetDiagnostics();
-  selectedBodyId = currentScenario.defaultTargetId;
-  renderer.clearTrails();
-  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
-  renderer.selectBody(selectedBodyId);
-  renderer.stopFollowing();
-  renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
-  renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
-  renderSelectedBody();
+  refreshCatalog();
+  renderSelectedBody(true);
+  updateManualScaleControls();
+  renderNavigator();
+  updateGifExportHint();
+  renderLaunchPanel();
+}
+
+function launchSpacecraft(): void {
+  const targetId = launchTargetSelect.value;
+  if (!targetId) return;
+  clearActiveSpacecraft(false);
+  orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
+  const target = findLaunchTargetState({
+    id: targetId,
+    bodies: simulation.bodies,
+    orbitalStates,
+  });
+  if (!target) {
+    renderLaunchPanel();
+    return;
+  }
+
+  let launch;
+  try {
+    launch = createEarthLaunch({ bodies: simulation.bodies, target });
+  } catch (error) {
+    launchMission = undefined;
+    launchInjectionSpeedMps = undefined;
+    launchStatusElement.textContent =
+      error instanceof Error ? error.message.toUpperCase() : "LAUNCH FAILED";
+    launchStatusElement.classList.add("missed");
+    return;
+  }
+
+  simulation.addRuntimeBody(launch.spacecraft);
+  const spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);
+  if (!spacecraft) throw new Error("Spacecraft launch failed to enter simulation state.");
+  renderer.addBody(spacecraft);
+  launchMission = createLaunchMissionState({
+    launch,
+    target,
+    elapsedSeconds: simulation.elapsedSeconds,
+  });
+  launchInjectionSpeedMps = launch.injectionSpeedMps;
+  accumulatorSeconds = 0;
+  resetDiagnostics();
+  refreshCatalog();
+  renderer.update(getDisplayBodies(), orbitalStates, simulation.elapsedSeconds);
+  selectAndFollow(ACTIVE_SPACECRAFT_ID);
+  renderLaunchPanel();
+}
+
+function applyLaunchGuidance(): void {
+  if (!launchMission || launchMission.status !== "en-route") return;
+  const spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);
+  const target = findLaunchTargetState({
+    id: launchMission.targetId,
+    bodies: simulation.bodies,
+    orbitalStates,
+  });
+  if (!spacecraft || !target) return;
+  const guidance = calculateSpacecraftGuidance({
+    spacecraft,
+    target,
+    config: {
+      fixedTimestepSeconds: simulation.fixedTimestepSeconds,
+      arrivalThresholdM: launchMission.arrivalThresholdM,
+      maxAccelerationMps2: DEFAULT_SPACECRAFT_GUIDANCE.maxAccelerationMps2,
+      maxCruiseSpeedMps: DEFAULT_SPACECRAFT_GUIDANCE.maxCruiseSpeedMps,
+    },
+  });
+  simulation.applyRuntimeBodyVelocityDelta(ACTIVE_SPACECRAFT_ID, guidance.deltaVelocityMps);
+  launchMission = updateLaunchMissionGuidanceMode(launchMission, guidance.mode);
+}
+
+function dockArrivedSpacecraft(): void {
+  if (!launchMission || launchMission.status !== "arrived" || dockedSpacecraft) return;
+  const spacecraft = simulation.bodies.find((body) => body.id === ACTIVE_SPACECRAFT_ID);
+  const target = findLaunchTargetState({
+    id: launchMission.targetId,
+    bodies: simulation.bodies,
+    orbitalStates,
+  });
+  if (!spacecraft || !target) return;
+
+  const spacecraftWasSelected = selectedBodyId === ACTIVE_SPACECRAFT_ID;
+  dockedSpacecraftDirectionM = subtract(spacecraft.positionM, target.positionM);
+  dockedSpacecraft = createDockedSpacecraftBody({
+    target,
+    approachDirectionM: dockedSpacecraftDirectionM,
+  });
+  simulation.removeRuntimeBody(ACTIVE_SPACECRAFT_ID);
+  renderer.removeBody(ACTIVE_SPACECRAFT_ID);
+  renderer.addBody(dockedSpacecraft);
+  if (spacecraftWasSelected) {
+    renderer.selectBody(ACTIVE_SPACECRAFT_ID);
+    renderer.focusBody(ACTIVE_SPACECRAFT_ID, true);
+  } else {
+    renderer.selectBody(selectedBodyId);
+  }
+  resetDiagnostics();
+  refreshCatalog();
+  renderSelectedBody(true);
   updateManualScaleControls();
   renderNavigator();
   updateGifExportHint();
 }
 
+function resetCurrentScenario(): void {
+  clearActiveSpacecraft(false);
+  simulation.reset();
+  accumulatorSeconds = 0;
+  orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
+  resetDiagnostics();
+  selectedBodyId = currentScenario.defaultTargetId;
+  launchMission = undefined;
+  launchInjectionSpeedMps = undefined;
+  refreshCatalog();
+  renderer.clearTrails();
+  renderer.update(getDisplayBodies(), orbitalStates, simulation.elapsedSeconds);
+  renderer.selectBody(selectedBodyId);
+  renderer.stopFollowing();
+  renderer.setViewFrame(viewFrameSelect.value as ViewFrame, selectedBodyId);
+  renderer.setTrailMode(trailModeSelect.value as TrailMode, selectedBodyId);
+  renderSelectedBody(true);
+  updateManualScaleControls();
+  renderNavigator();
+  updateGifExportHint();
+  renderLaunchPanel();
+}
+
 function switchScenario(id: string): void {
   currentScenario = findScenario(id);
   orbitalDefinitions = currentScenario.displayOnlyOrbitalBodies;
-  simulation = createSimulation(currentScenario);
-  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
-  namesById = buildNamesById();
-  navigatorEntries = createNavigatorEntries(simulation.bodies, orbitalDefinitions, namesById);
+  simulation = createScenarioSimulation(
+    currentScenario,
+    COLLISION_POLICY,
+    DEFAULT_FIXED_TIMESTEP_SECONDS,
+  );
+  orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
+  launchMission = undefined;
+  launchInjectionSpeedMps = undefined;
+  dockedSpacecraft = undefined;
+  dockedSpacecraftDirectionM = undefined;
   selectedBodyId = currentScenario.defaultTargetId;
   accumulatorSeconds = 0;
   activeNavigatorIndex = 0;
   searchInput.value = "";
   renderer.dispose();
   renderer = createRenderer();
+  refreshCatalog();
   applyVisualSettingsToRenderer();
   renderer.setDistanceScale(Number(distanceScaleInput.value));
   renderer.setTrailsVisible(trailsInput.checked);
@@ -471,16 +782,18 @@ function switchScenario(id: string): void {
   renderer.setCometPathsVisible(cometPathsInput.checked);
   renderer.setCometTailsVisible(cometTailsInput.checked);
   renderer.setMoonsVisible(moonsInput.checked);
+  renderer.setBarycenterVisible(barycenterInput.checked);
   renderer.setLabelsVisible(labelsInput.checked);
   resetDiagnostics();
   updateDatasetPanel();
-  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
+  renderer.update(getDisplayBodies(), orbitalStates, simulation.elapsedSeconds);
   renderer.selectBody(selectedBodyId);
   renderer.focusBody(selectedBodyId, false);
-  renderSelectedBody();
+  renderSelectedBody(true);
   updateManualScaleControls();
   renderNavigator();
   updateGifExportHint();
+  renderLaunchPanel();
 }
 
 function updateSpeedFromControls(): void {
@@ -495,6 +808,7 @@ function updateSpeedFromControls(): void {
     timeScaleSeconds = Number(speedSelect.value);
     running = true;
   }
+  maxStepsPerFrame = calculateActiveStepBudget();
   speedValue.value = timeScaleSeconds === 0 ? "Paused" : formatTimeScale(timeScaleSeconds);
   updateRunningUi();
 }
@@ -578,10 +892,6 @@ function downloadBlob(blob: Blob, fileName: string, objectUrls: string[]): void 
   link.remove();
 }
 
-function yieldToBrowser(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
-}
-
 async function exportCurrentViewGif(): Promise<void> {
   if (activeGifExport) return;
 
@@ -615,13 +925,17 @@ async function exportCurrentViewGif(): Promise<void> {
 
   const exportSimulation = NBodySimulation.fromSnapshot(simulation.snapshot, {
     fixedTimestepSeconds: simulation.fixedTimestepSeconds,
-    minimumDistanceM: MINIMUM_DISTANCE_M,
+    collisionPolicy: COLLISION_POLICY,
   });
+  const initialExportOrbitalStates = calculateScenarioOrbitalStates(
+    orbitalDefinitions,
+    exportSimulation,
+  );
   const stage = createExportStage(options.outputWidthPx, options.outputHeightPx);
   const exportRenderer = new SolarSystemRenderer(
     stage.container,
     stage.labels,
-    exportSimulation.bodies,
+    getDisplayBodiesFor(exportSimulation.bodies, initialExportOrbitalStates),
     orbitalDefinitions,
     currentScenario.belts,
     exportSimulation.bodies.find((body) => body.id === "sun")?.massKg ??
@@ -654,9 +968,12 @@ async function exportCurrentViewGif(): Promise<void> {
         if (completedSteps % (stepChunk * 4) === 0) await yieldToBrowser();
       }
 
-      const exportOrbitalStates = calculateOrbitalStates(orbitalDefinitions, exportSimulation);
+      const exportOrbitalStates = calculateScenarioOrbitalStates(
+        orbitalDefinitions,
+        exportSimulation,
+      );
       exportRenderer.update(
-        exportSimulation.bodies,
+        getDisplayBodiesFor(exportSimulation.bodies, exportOrbitalStates),
         exportOrbitalStates,
         exportSimulation.elapsedSeconds,
       );
@@ -675,7 +992,7 @@ async function exportCurrentViewGif(): Promise<void> {
       setGifExportUi({
         exporting: true,
         progress,
-        message: `Encoding frame ${frameIndex + 1} of ${estimate.frameCount}`,
+        message: formatGifExportProgress(frameIndex, estimate.frameCount),
       });
       await yieldToBrowser();
     }
@@ -712,7 +1029,7 @@ function updateTelemetry(stepsThisFrame: number, clamped: boolean): void {
   elapsedElement.textContent = formatElapsed(elapsed);
   stepElement.textContent = formatDuration(DEFAULT_FIXED_TIMESTEP_SECONDS);
   timeScaleElement.textContent = speedValue.value;
-  maxStepsElement.textContent = String(DEFAULT_MAX_STEPS_PER_FRAME);
+  maxStepsElement.textContent = String(maxStepsPerFrame);
   catchupElement.textContent = clamped ? "Clamped" : "Idle";
   stepsFrameElement.textContent = String(stepsThisFrame);
 
@@ -736,8 +1053,10 @@ function updateTelemetry(stepsThisFrame: number, clamped: boolean): void {
     angularMomentumWarningDrift: ANGULAR_WARNING_DRIFT,
   });
   const latest = status.samples.at(-1);
-  energyDriftElement.textContent = `${(((latest?.energyDrift ?? 0) * 1e6)).toFixed(3)} ppm`;
-  momentumDriftElement.textContent = `${(((latest?.angularMomentumDrift ?? 0) * 1e6)).toFixed(3)} ppm`;
+  energyDriftElement.textContent = formatDriftPartsPerMillion(latest?.energyDrift ?? 0);
+  momentumDriftElement.textContent = formatDriftPartsPerMillion(
+    latest?.angularMomentumDrift ?? 0,
+  );
   energySparkElement.textContent = sparkline(status.samples, "energyDrift");
   angularSparkElement.textContent = sparkline(status.samples, "angularMomentumDrift");
   linearMomentumElement.textContent = status.linearMomentumMagnitude.toExponential(3);
@@ -746,6 +1065,14 @@ function updateTelemetry(stepsThisFrame: number, clamped: boolean): void {
   diagnosticStatusElement.textContent = status.warning ? "Drift warning" : "Stable";
   diagnosticStatusElement.classList.toggle("warning", status.warning);
   diagnosticsSection?.classList.toggle("warning", status.warning);
+}
+
+function updatePerformanceTelemetry(input: PerformanceTelemetry): void {
+  physicsTimeElement.textContent = formatMilliseconds(input.physicsMs);
+  renderTimeElement.textContent = formatMilliseconds(input.renderMs);
+  diagnosticsTimeElement.textContent = formatMilliseconds(input.diagnosticsMs);
+  bodyCountElement.textContent = String(input.bodyCount);
+  visibleObjectsElement.textContent = String(input.visibleObjectCount);
 }
 
 toggleButton.addEventListener("click", () => {
@@ -768,6 +1095,9 @@ speedSelect.addEventListener("change", updateSpeedFromControls);
 customSpeedInput.addEventListener("input", updateSpeedFromControls);
 gifOutputWidthInput.addEventListener("input", updateGifExportHint);
 gifOutputHeightInput.addEventListener("input", updateGifExportHint);
+launchTargetSelect.addEventListener("change", renderLaunchPanel);
+launchSpacecraftButton.addEventListener("click", launchSpacecraft);
+clearSpacecraftButton.addEventListener("click", () => clearActiveSpacecraft(true));
 exportGifButton.addEventListener("click", () => {
   void exportCurrentViewGif();
 });
@@ -843,6 +1173,9 @@ cometTailsInput.addEventListener("change", () =>
   renderer.setCometTailsVisible(cometTailsInput.checked),
 );
 moonsInput.addEventListener("change", () => renderer.setMoonsVisible(moonsInput.checked));
+barycenterInput.addEventListener("change", () =>
+  renderer.setBarycenterVisible(barycenterInput.checked),
+);
 labelsInput.addEventListener("change", () => renderer.setLabelsVisible(labelsInput.checked));
 distanceScaleInput.addEventListener("input", () => {
   const scale = Number(distanceScaleInput.value);
@@ -877,31 +1210,63 @@ searchInput.addEventListener("keydown", (event) => {
   }
 });
 
+setupCollapsibleSections({ panel: panelElement });
+
 function frame(now: number): void {
   const realDeltaSeconds = Math.min((now - lastFrameTime) / 1_000, 0.1);
   lastFrameTime = now;
   let stepsThisFrame = 0;
   let clamped = false;
+  let physicsMs = 0;
   if (running && timeScaleSeconds > 0) {
+    const physicsStartMs = performance.now();
+    maxStepsPerFrame = calculateActiveStepBudget();
     accumulatorSeconds += realDeltaSeconds * timeScaleSeconds;
     while (
       accumulatorSeconds >= simulation.fixedTimestepSeconds &&
-      stepsThisFrame < DEFAULT_MAX_STEPS_PER_FRAME
+      stepsThisFrame < maxStepsPerFrame
     ) {
+      applyLaunchGuidance();
+      dockArrivedSpacecraft();
       simulation.step();
       accumulatorSeconds -= simulation.fixedTimestepSeconds;
       stepsThisFrame += 1;
     }
-    if (stepsThisFrame === DEFAULT_MAX_STEPS_PER_FRAME) {
+    if (accumulatorSeconds >= simulation.fixedTimestepSeconds) {
       accumulatorSeconds = Math.min(accumulatorSeconds, simulation.fixedTimestepSeconds);
       clamped = true;
     }
+    physicsMs = performance.now() - physicsStartMs;
   }
-  orbitalStates = calculateOrbitalStates(orbitalDefinitions, simulation);
-  renderer.update(simulation.bodies, orbitalStates, simulation.elapsedSeconds);
+  const renderStartMs = performance.now();
+  orbitalStates = calculateScenarioOrbitalStates(orbitalDefinitions, simulation);
+  refreshDockedSpacecraftDisplay();
+  if (launchMission) {
+    launchMission = updateLaunchMissionState({
+      mission: launchMission,
+      bodies: getDisplayBodies(),
+      orbitalStates,
+      elapsedSeconds: simulation.elapsedSeconds,
+    });
+    dockArrivedSpacecraft();
+    refreshDockedSpacecraftDisplay();
+  }
+  renderer.update(getDisplayBodies(), orbitalStates, simulation.elapsedSeconds);
+  renderer.updateBarycenter(calculateCenterOfMass(simulation.bodies));
   renderer.render();
+  const renderStats = renderer.getStats();
+  const renderMs = performance.now() - renderStartMs;
+  const diagnosticsStartMs = performance.now();
   updateTelemetry(stepsThisFrame, clamped);
+  renderLaunchPanel();
   renderSelectedBody();
+  updatePerformanceTelemetry({
+    physicsMs,
+    renderMs,
+    diagnosticsMs: performance.now() - diagnosticsStartMs,
+    bodyCount: simulation.bodies.length,
+    visibleObjectCount: renderStats.visibleObjectCount,
+  });
   requestAnimationFrame(frame);
 }
 
@@ -915,8 +1280,10 @@ applyVisualSettingsToRenderer();
 applyLayerSettingsToRenderer();
 renderer.selectBody(selectedBodyId);
 renderer.focusBody(selectedBodyId, false);
-renderer.update(simulation.bodies, orbitalStates, 0);
-renderSelectedBody();
+renderer.update(getDisplayBodies(), orbitalStates, 0);
+renderer.updateBarycenter(calculateCenterOfMass(simulation.bodies));
+renderSelectedBody(true);
+renderLaunchTargets();
 renderNavigator();
 updateGifExportHint();
 requestAnimationFrame(frame);
